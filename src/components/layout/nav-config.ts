@@ -1,6 +1,7 @@
 import {
   CalendarClock,
   CalendarDays,
+  FileText,
   Flag,
   Clock,
   KeyRound,
@@ -47,6 +48,10 @@ export const navByRole: Record<Role, NavSection[]> = {
       ],
     },
     {
+      label: "Payroll",
+      items: [{ label: "Payslips", href: "/admin/payslips", icon: FileText, ready: true }],
+    },
+    {
       label: "Account",
       items: [{ label: "Change password", href: "/admin/password", icon: KeyRound, ready: true }],
     },
@@ -67,6 +72,10 @@ export const navByRole: Record<Role, NavSection[]> = {
     {
       label: "Company",
       items: [{ label: "Holidays", href: "/employee/holidays", icon: Flag, ready: true }],
+    },
+    {
+      label: "Payroll",
+      items: [{ label: "Payslips", href: "/employee/payslips", icon: FileText, ready: true }],
     },
     {
       label: "Account",

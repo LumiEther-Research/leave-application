@@ -73,10 +73,22 @@ export async function createEmployee(input: {
   joiningDate: string;
   passwordHash: string;
   category?: Category;
+  /** plain "16500.00", already validated */
+  monthlySalary?: string | null;
+  designation?: string | null;
 }): Promise<Employee> {
   const [row] = await query<{ id: string }>(
-    `insert into employees (name, email, password_hash, joining_date, category) values ($1, $2, $3, $4, $5) returning id`,
-    [input.name, input.email.toLowerCase(), input.passwordHash, input.joiningDate, input.category ?? "employee"],
+    `insert into employees (name, email, password_hash, joining_date, category, monthly_salary, designation)
+     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    [
+      input.name,
+      input.email.toLowerCase(),
+      input.passwordHash,
+      input.joiningDate,
+      input.category ?? "employee",
+      input.monthlySalary ?? null,
+      input.designation ?? null,
+    ],
   );
   return (await getEmployees()).find((e) => e.id === row.id)!;
 }
@@ -90,6 +102,32 @@ export async function setEmployeePasswordHash(id: string, hash: string): Promise
 export async function setEmployeeCategory(id: string, category: Category): Promise<boolean> {
   if (!isUuid(id) || !(CATEGORIES as readonly string[]).includes(category)) return false;
   return (await query(`update employees set category = $2 where id = $1 returning id`, [id, category])).length > 0;
+}
+
+/**
+ * Admin only (the caller checks). Permanently removes the employee and, with them, their leave, comp-off,
+ * permissions and payslips. Their session stops working on its next request. False if they don't exist.
+ */
+export async function deleteEmployee(id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  return (await query(`delete from employees where id = $1 returning id`, [id])).length > 0;
+}
+
+/** Admin only (the caller checks and validates). Saves the salary and designation shown on payslips. */
+export async function setEmployeePayroll(
+  id: string,
+  payroll: { monthlySalary: string | null; designation: string | null },
+): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  return (
+    (
+      await query(`update employees set monthly_salary = $2, designation = $3 where id = $1 returning id`, [
+        id,
+        payroll.monthlySalary,
+        payroll.designation,
+      ])
+    ).length > 0
+  );
 }
 
 // -------------------------------------------------------- leave categories

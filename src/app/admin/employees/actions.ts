@@ -3,9 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { hashPassword } from "@/lib/auth/password";
 import { requireRole } from "@/lib/auth/session";
-import { nameFromEmail, validateNewEmployee, type NewEmployeeErrors } from "@/lib/employees";
+import { nameFromEmail, validateNewEmployee, validatePayroll, type NewEmployeeErrors, type PayrollErrors } from "@/lib/employees";
 import { isUniqueViolation } from "@/lib/db";
-import { createEmployee, setEmployeeCategory } from "@/lib/store";
+import { createEmployee, deleteEmployee, setEmployeeCategory, setEmployeePayroll } from "@/lib/store";
 import { CATEGORIES, type Category } from "@/lib/types";
 import { isEmailInUse } from "@/lib/auth/users";
 
@@ -14,7 +14,7 @@ export type CreateEmployeeState = {
   created?: { name: string; email: string };
   errors?: NewEmployeeErrors;
   /** sent back on failure so the fields keep what was typed (never the password) */
-  values?: { email: string; joiningDate: string; category: string };
+  values?: { email: string; joiningDate: string; category: string; monthlySalary: string; designation: string };
   error?: string;
 };
 
@@ -26,6 +26,8 @@ export async function addEmployee(_prev: CreateEmployeeState, formData: FormData
     email: String(formData.get("email") ?? ""),
     joiningDate: String(formData.get("joiningDate") ?? ""),
     category: String(formData.get("category") ?? ""),
+    monthlySalary: String(formData.get("monthlySalary") ?? ""),
+    designation: String(formData.get("designation") ?? ""),
   };
   const result = validateNewEmployee(
     { ...values, password: String(formData.get("password") ?? "") },
@@ -40,6 +42,8 @@ export async function addEmployee(_prev: CreateEmployeeState, formData: FormData
       joiningDate: result.value.joiningDate,
       passwordHash: await hashPassword(result.value.password),
       category: result.value.category,
+      monthlySalary: result.value.monthlySalary,
+      designation: result.value.designation,
     });
     revalidatePath("/admin/employees");
     revalidatePath("/admin");
@@ -61,6 +65,36 @@ export async function changeEmployeeCategory(employeeId: string, category: strin
     return { ok: false, error: "That employee no longer exists." };
   }
   revalidatePath("/admin/employees");
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+export type UpdatePayrollResult = { ok: true } | { ok: false; errors?: PayrollErrors; error?: string };
+
+/** Admin only. Saves the monthly salary and designation shown on payslips. Empty clears a value. */
+export async function updateEmployeePayroll(
+  employeeId: string,
+  input: { monthlySalary: string; designation: string },
+): Promise<UpdatePayrollResult> {
+  await requireRole("admin");
+  const result = validatePayroll(input);
+  if (!result.ok) return { ok: false, errors: result.errors };
+  if (!(await setEmployeePayroll(String(employeeId), result.value))) {
+    return { ok: false, error: "That employee no longer exists." };
+  }
+  revalidatePath("/admin/employees");
+  revalidatePath("/admin/payslips");
+  return { ok: true };
+}
+
+export type RemoveEmployeeResult = { ok: true } | { ok: false; error: string };
+
+/** Admin only. Permanently removes the employee and everything of theirs: leave, comp-off, permissions, payslips. */
+export async function removeEmployee(employeeId: string): Promise<RemoveEmployeeResult> {
+  await requireRole("admin");
+  if (!(await deleteEmployee(String(employeeId)))) return { ok: false, error: "That employee no longer exists." };
+  revalidatePath("/admin/employees");
+  revalidatePath("/admin/payslips");
   revalidatePath("/admin");
   return { ok: true };
 }

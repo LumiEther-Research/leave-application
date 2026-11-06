@@ -108,6 +108,33 @@ export function AddEmployeeForm() {
           {...invalid("joiningDate")}
         />
       </Field>
+      <Field id="designation" label="Designation" hint="Optional. Shown on their payslip." error={errors.designation}>
+        <Input
+          id="designation"
+          name="designation"
+          autoComplete="off"
+          placeholder="Software Engineer"
+          defaultValue={state.values?.designation}
+          {...invalid("designation")}
+        />
+      </Field>
+      <Field
+        id="monthlySalary"
+        label="Monthly salary (₹)"
+        hint="Optional. Becomes the basic on their payslips."
+        error={errors.monthlySalary}
+      >
+        <Input
+          id="monthlySalary"
+          name="monthlySalary"
+          inputMode="decimal"
+          autoComplete="off"
+          placeholder="16500"
+          defaultValue={state.values?.monthlySalary}
+          className="tabular-nums"
+          {...invalid("monthlySalary")}
+        />
+      </Field>
       <Field
         id="password"
         label="Temporary password"

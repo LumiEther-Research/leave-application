@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsc src/lib/dates.test.ts src/lib/leave.test.ts src/lib/auth/auth.test.ts src/lib/requests.test.ts src/lib/store.test.ts src/lib/retry.test.ts --outDir node_modules/.cache/test-build --module commonjs --target es2022 --esModuleInterop --strict --skipLibCheck && node --test --test-concurrency=1 --test-reporter=spec node_modules/.cache/test-build/dates.test.js node_modules/.cache/test-build/leave.test.js node_modules/.cache/test-build/auth/auth.test.js node_modules/.cache/test-build/requests.test.js node_modules/.cache/test-build/store.test.js node_modules/.cache/test-build/retry.test.js",
+    "test": "tsc src/lib/dates.test.ts src/lib/leave.test.ts src/lib/auth/auth.test.ts src/lib/requests.test.ts src/lib/store.test.ts src/lib/retry.test.ts src/lib/payslip/payslip.test.ts --outDir node_modules/.cache/test-build --module commonjs --target es2022 --esModuleInterop --strict --skipLibCheck && node --test --test-concurrency=1 --test-reporter=spec node_modules/.cache/test-build/dates.test.js node_modules/.cache/test-build/leave.test.js node_modules/.cache/test-build/auth/auth.test.js node_modules/.cache/test-build/requests.test.js node_modules/.cache/test-build/store.test.js node_modules/.cache/test-build/retry.test.js node_modules/.cache/test-build/payslip/payslip.test.js",
     "hash-password": "node scripts/hash-password.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "db:migrate:test": "node scripts/migrate.mjs --test"

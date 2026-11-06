@@ -4,9 +4,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDate, parseISO } from "@/lib/dates";
+import { formatInr, toPlain } from "@/lib/payslip/money";
+import type { PayslipEmployee } from "@/lib/payslip/store";
 import { initialsOf, plural } from "@/lib/leave";
 import type { Employee } from "@/lib/types";
 import { CategorySelect } from "./category-select";
+import { EditPayrollButton } from "./edit-payroll-button";
+import { RemoveEmployeeButton } from "./remove-employee-button";
 
 function Person({ employee }: { employee: Employee }) {
   return (
@@ -24,7 +28,29 @@ function Person({ employee }: { employee: Employee }) {
   );
 }
 
-export function EmployeeListCard({ employees }: { employees: Employee[] }) {
+function RowActions({ employee, payroll }: { employee: Employee; payroll?: PayslipEmployee }) {
+  return (
+    <div className="flex items-center gap-2">
+      <PayrollEdit employee={employee} payroll={payroll} />
+      <RemoveEmployeeButton employeeId={employee.id} name={employee.name} email={employee.email} />
+    </div>
+  );
+}
+
+function PayrollEdit({ employee, payroll }: { employee: Employee; payroll?: PayslipEmployee }) {
+  return (
+    <EditPayrollButton
+      employeeId={employee.id}
+      name={employee.name}
+      monthlySalary={payroll?.monthlySalary == null ? "" : toPlain(payroll.monthlySalary)}
+      designation={payroll?.designation ?? ""}
+    />
+  );
+}
+
+/** `payroll` is each employee's salary and designation, which only admins see. */
+export function EmployeeListCard({ employees, payroll }: { employees: Employee[]; payroll: PayslipEmployee[] }) {
+  const payrollOf = (id: string) => payroll.find((p) => p.id === id);
   return (
     <Card className="[--card-spacing:--spacing(6)]">
       <CardHeader>
@@ -49,7 +75,10 @@ export function EmployeeListCard({ employees }: { employees: Employee[] }) {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="h-11">Employee</TableHead>
                     <TableHead className="h-11">Category</TableHead>
+                    <TableHead className="h-11">Designation</TableHead>
+                    <TableHead className="h-11 text-right">Monthly salary</TableHead>
                     <TableHead className="h-11 text-right">Joined</TableHead>
+                    <TableHead className="h-11 text-right"><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -61,8 +90,19 @@ export function EmployeeListCard({ employees }: { employees: Employee[] }) {
                       <TableCell className="py-3">
                         <CategorySelect employeeId={e.id} name={e.name} value={e.category} />
                       </TableCell>
+                      <TableCell className="py-3 text-muted-foreground">
+                        {payrollOf(e.id)?.designation || "—"}
+                      </TableCell>
+                      <TableCell className="py-3 text-right tabular-nums">
+                        {payrollOf(e.id)?.monthlySalary == null ? "—" : formatInr(payrollOf(e.id)!.monthlySalary!)}
+                      </TableCell>
                       <TableCell className="py-3 text-right text-muted-foreground tabular-nums">
                         {formatDate(parseISO(e.joiningDate), "d MMM yyyy")}
+                      </TableCell>
+                      <TableCell className="py-3">
+                        <div className="flex justify-end">
+                          <RowActions employee={e} payroll={payrollOf(e.id)} />
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -78,6 +118,11 @@ export function EmployeeListCard({ employees }: { employees: Employee[] }) {
                   <p className="text-xs text-muted-foreground tabular-nums">
                     Joined {formatDate(parseISO(e.joiningDate), "d MMM yyyy")}
                   </p>
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {payrollOf(e.id)?.designation || "No designation"} ·{" "}
+                    {payrollOf(e.id)?.monthlySalary == null ? "No salary set" : formatInr(payrollOf(e.id)!.monthlySalary!)}
+                  </p>
+                  <RowActions employee={e} payroll={payrollOf(e.id)} />
                 </li>
               ))}
             </ul>
