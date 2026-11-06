@@ -1,23 +1,39 @@
-// The Neon Postgres connection. One HTTP-based client per DATABASE_URL, created on first use,
-// so importing this never needs a database and it works in Vercel serverless functions.
-import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+// The one Postgres connection pool, reading DATABASE_URL. Created on first use, so importing this never
+// needs a database. Works with Neon (use its pooled connection string) or any Postgres.
+import { Pool } from "pg";
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import { retryNetworkErrors } from "./retry";
 
-// Node gives each address 250ms to connect before trying the next, then fails with ETIMEDOUT if
-// all of them are slow. On a slow or IPv6-less network that is too tight, so allow more time.
+// Node gives each address 250ms to connect before trying the next, then fails with ETIMEDOUT if all of
+// them are slow. On a slow or IPv6-less network that is too tight, so allow more time.
 setDefaultAutoSelectFamilyAttemptTimeout?.(2000);
 
 export class DatabaseConfigError extends Error {}
 
-let cached: { url: string; client: NeonQueryFunction<false, false> } | undefined;
+/** The most connections one server instance holds open. */
+export const MAX_CONNECTIONS = 5;
 
-function client(): NeonQueryFunction<false, false> {
+// Kept on globalThis so a dev-server hot reload doesn't leave a second pool behind.
+const holder = globalThis as typeof globalThis & { __pgPool?: { url: string; pool: Pool } };
+
+function pool(): Pool {
   const url = process.env.DATABASE_URL;
   if (!url)
-    throw new DatabaseConfigError("DATABASE_URL is not set. Add your Neon connection string to the environment.");
-  if (cached?.url !== url) cached = { url, client: neon(url) };
-  return cached.client;
+    throw new DatabaseConfigError("DATABASE_URL is not set. Add your Postgres connection string to the environment.");
+  if (holder.__pgPool?.url !== url) {
+    void holder.__pgPool?.pool.end(); // the URL changed (tests point it at the test branch)
+    const created = new Pool({
+      connectionString: url,
+      max: MAX_CONNECTIONS,
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+      allowExitOnIdle: true, // scripts and tests can finish without closing the pool
+    });
+    // An idle connection dropped by the server must not crash the process. The next query opens a new one.
+    created.on("error", (error) => console.error(`[db] idle connection error: ${error.message}`));
+    holder.__pgPool = { url, pool: created };
+  }
+  return holder.__pgPool.pool;
 }
 
 export type Row = Record<string, unknown>;
@@ -27,10 +43,17 @@ export type Row = Record<string, unknown>;
  * the network dropped is tried again a couple of times; a write never is, so it can't run twice.
  */
 export async function query<T = Row>(text: string, params: unknown[] = []): Promise<T[]> {
-  const run = async () => (await client().query(text, params)) as T[];
+  const run = async () => (await pool().query(text, params)).rows as T[];
   return /^\s*(select|with)\b/i.test(text) && !/\b(insert|update|delete)\b/i.test(text)
     ? retryNetworkErrors(run)
     : run();
+}
+
+/** Closes the pool. Only needed by code that wants to exit at once. */
+export async function closePool() {
+  const current = holder.__pgPool;
+  holder.__pgPool = undefined;
+  await current?.pool.end();
 }
 
 /** Postgres error code of a failed query, e.g. "23505" for a unique violation. */

@@ -7,7 +7,7 @@ Internal leave management tool for ~5 users. Polished, production-quality UI. On
 - Next.js (App Router) + TypeScript + Tailwind CSS
 - shadcn/ui for all components. Do not hand-roll tables, dialogs, badges, inputs, or toasts.
 - Icons: lucide-react only.
-- Database: Neon Postgres via `@neondatabase/serverless` only, accessed from server components and server actions. Tests that touch the database use a Neon test branch in DATABASE_URL_TEST.
+- Database: Neon Postgres via `pg` (one connection pool, max 5, reading DATABASE_URL), accessed from server components and server actions. Tests that touch the database use a Neon test branch in DATABASE_URL_TEST.
 - Deploy: Vercel.
 - Fonts: Inter (via next/font). Use tabular numbers for all counts and dates.
 - Ask before adding any dependency not listed here. Proposed but not yet approved: framer-motion (page and list transitions).

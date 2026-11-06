@@ -1,12 +1,17 @@
 // Retrying when the network, not the database, failed.
 
-/** True when the request never got an answer from the database (timeout, DNS, connection reset). */
+/** True when the connection to the database failed or dropped (timeout, DNS, reset), not the query itself. */
 export function isNetworkError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const cause = (error as { sourceError?: { message?: string } }).sourceError;
-  const text = `${error.message} ${cause?.message ?? ""}`;
-  return /fetch failed|Error connecting to database|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT/i.test(
-    text,
+  const code = (error as { code?: unknown }).code;
+  if (
+    typeof code === "string" &&
+    /^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|ENETUNREACH|EHOSTUNREACH)$/.test(code)
+  ) {
+    return true;
+  }
+  return /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error/i.test(
+    error.message,
   );
 }
 

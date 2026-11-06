@@ -3,19 +3,19 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { isNetworkError, retryNetworkErrors } from "./retry";
 
-const networkError = () =>
-  Object.assign(new Error("Error connecting to database: TypeError: fetch failed"), {
-    sourceError: new TypeError("fetch failed"),
-  });
+const networkError = () => Object.assign(new Error("connect ETIMEDOUT 10.0.0.1:5432"), { code: "ETIMEDOUT" });
 
 describe("network errors", () => {
-  test("a failed fetch, a timeout and a reset are network errors; a database error is not", () => {
+  test("a timeout, a reset, a dropped or unreachable connection are network errors; a database error is not", () => {
     assert.equal(isNetworkError(networkError()), true);
-    assert.equal(isNetworkError(new Error("connect ETIMEDOUT 1.2.3.4:443")), true);
     assert.equal(isNetworkError(new Error("read ECONNRESET")), true);
+    assert.equal(isNetworkError(new Error("Connection terminated unexpectedly")), true);
+    assert.equal(isNetworkError(new Error("timeout exceeded when trying to connect")), true);
+    assert.equal(isNetworkError(Object.assign(new Error("getaddrinfo"), { code: "ENOTFOUND" })), true);
     assert.equal(isNetworkError(new Error('duplicate key value violates unique constraint "admins_email_key"')), false);
     assert.equal(isNetworkError(new Error("password authentication failed for user")), false);
-    assert.equal(isNetworkError("fetch failed"), false);
+    assert.equal(isNetworkError("ETIMEDOUT"), false); // not an Error
+    assert.equal(isNetworkError(Object.assign(new Error("duplicate key"), { code: "23505" })), false);
   });
 });
 
@@ -43,7 +43,7 @@ describe("retrying", () => {
     let calls = 0;
     await assert.rejects(
       retryNetworkErrors(async () => (++calls, Promise.reject(networkError())), 2, 1),
-      /fetch failed/,
+      /ETIMEDOUT/,
     );
     assert.equal(calls, 3); // the first try and two retries
   });
