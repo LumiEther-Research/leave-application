@@ -5,7 +5,7 @@ Internal leave management tool for ~5 users. Polished, production-quality UI. On
 
 ## Stack
 - Next.js (App Router) + TypeScript + Tailwind CSS
-- shadcn/ui for all components. Do not hand-roll tables, dialogs, badges, inputs, or toasts.
+- shadcn/ui components are allowed, with these three dependencies: `@base-ui/react`, `class-variance-authority`, `tw-animate-css`. Do not hand-roll tables, dialogs, badges, inputs, or toasts.
 - Icons: lucide-react only.
 - Database: Neon Postgres via `pg` (one connection pool, max 5, reading DATABASE_URL), accessed from server components and server actions. Tests that touch the database use a Neon test branch in DATABASE_URL_TEST.
 - Deploy: Vercel.
@@ -18,7 +18,7 @@ Internal leave management tool for ~5 users. Polished, production-quality UI. On
 
 ## Policy
 - Company name: LumiEther Research.
-- Accent color: violet-600 (#7C3AED).
+- Accent color: #7F22FE (violet), to match the live app, which renders it from the `--primary` token in `src/app/globals.css` (in dark mode that token renders #8E51FF). Tailwind's violet-600 is #7C3AED; that is not what the live app shows, so do not use it.
 - Work week is 5 days. Saturday and Sunday are non-working days.
 - Every employee has a category: contractor, employee, intern or student. An admin sets how many leave days a year each category gets; it is not a fixed number.
 - Employees are never shown their yearly leave days or how many they have left. They see only the days they have applied for, their comp-off, and the holidays.
@@ -33,7 +33,7 @@ Internal leave management tool for ~5 users. Polished, production-quality UI. On
 
 ## Visual direction
 - Premium SaaS feel, in the spirit of Linear, Vercel dashboard, and Stripe.
-- Palette: neutral zinc scale for surfaces and text. One accent color: violet-600 (#7C3AED), used sparingly for primary actions, active nav, and key highlights.
+- Palette: neutral zinc scale for surfaces and text. One accent color: violet #7F22FE (#8E51FF in dark mode), used sparingly for primary actions, active nav, and key highlights.
 - Background: very light zinc-50 canvas with white cards. Cards use a 1px zinc-200 border and a soft shadow, with rounded-xl corners.
 - Sidebar: white, with a subtle right border. Active item has an accent-tinted background and a left accent bar. Group nav items under small uppercase section labels.
 - Header: sticky, blurred background (backdrop-blur), page title on the left, user avatar and role badge on the right.
