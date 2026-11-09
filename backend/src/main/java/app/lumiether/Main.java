@@ -12,13 +12,20 @@ public final class Main {
 
   public static void main(String[] args) {
     Config config = Config.fromEnv(System.getenv());
+    if (config.cookieSecret() == null || config.cookieSecret().length() < 32) {
+      System.err.println("WARNING: LR_COOKIE_SECRET is not set to 32 or more characters, so nobody can sign in.");
+    }
+    if (config.allowedOrigins().isEmpty()) {
+      System.err.println("WARNING: ALLOWED_ORIGINS is empty, so every browser POST, PUT, PATCH and DELETE (which carry an Origin) will be refused.");
+    }
     Db db = new Db(config.databaseUrl());
     Store store = new Store(db);
     // Read at each sign-in, as the Node app read process.env, so the bootstrap closes the moment an admin exists.
     Auth auth = new Auth(store, () -> new Auth.Bootstrap(config.adminEmail(), config.adminPasswordHash()));
-    Sessions sessions = new Sessions(store, auth, config.sessionSecret());
+    Sessions sessions = new Sessions(store, auth, config.cookieSecret());
+    Api api = new Api(store, auth, sessions, new Api.Settings(config.cookieSecure(), config.allowedOrigins()));
 
-    WebServer server = WebServer.builder().port(config.port()).routing(new Api(store, auth, sessions, config.corsOrigin())::register).build().start();
+    WebServer server = WebServer.builder().port(config.port()).routing(api::register).build().start();
     if (!server.isRunning()) {
       System.err.println("The server did not start (is port " + config.port() + " already in use?).");
       System.exit(1);

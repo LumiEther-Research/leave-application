@@ -107,6 +107,19 @@ class PasswordTest {
     assertFalse(Password.verify("something else", out));
   }
 
+  /** A burst of sign-ins must not run more scrypts at once than the cap, or memory runs out (16 MiB each). */
+  @Test
+  void aBurstNeverRunsMoreScryptsAtOnceThanTheCap() throws Exception {
+    String hash = Password.hash("burst");
+    var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    var futures = new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+    for (int i = 0; i < 64; i++) futures.add(pool.submit(() -> Password.verify("burst", hash)));
+    for (var f : futures) assertTrue(f.get());
+    pool.close();
+    assertTrue(Password.peakConcurrent() <= Password.SLOTS, "peak " + Password.peakConcurrent() + " > " + Password.SLOTS);
+    assertTrue(Password.peakConcurrent() >= 1);
+  }
+
   private static boolean nodeAvailable() {
     try {
       Process p = new ProcessBuilder("node", "--version").redirectErrorStream(true).start();

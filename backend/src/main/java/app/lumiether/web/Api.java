@@ -12,7 +12,9 @@ import app.lumiether.domain.Types.Admin;
 import app.lumiether.domain.Types.SessionUser;
 import app.lumiether.domain.Validated;
 import io.helidon.http.HeaderNames;
+import io.helidon.http.Method;
 import io.helidon.http.Status;
+import io.helidon.webserver.http.HttpRoute;
 import io.helidon.webserver.http.HttpRouting;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
@@ -35,15 +37,17 @@ public final class Api {
   private final Sessions sessions;
   private final ChangePassword changePassword;
 
-  private final String corsOrigin;
+  private final Settings settings;
 
-  public Api(Store store, Auth auth, Sessions sessions) {
-    this(store, auth, sessions, null);
-  }
+  /**
+   * {@code cookieSecure}: add the Secure attribute to the session cookie (on in production, off on plain http).
+   * {@code allowedOrigins}: the origins that may make state-changing requests, already normalised (see CsrfGuard).
+   * There is no CORS: other sites can never make credentialed calls.
+   */
+  public record Settings(boolean cookieSecure, List<String> allowedOrigins) {}
 
-  /** {@code corsOrigin}: only for development, when the Flutter dev server runs on another port. Null in production. */
-  public Api(Store store, Auth auth, Sessions sessions, String corsOrigin) {
-    this.corsOrigin = corsOrigin == null || corsOrigin.isBlank() ? null : corsOrigin;
+  public Api(Store store, Auth auth, Sessions sessions, Settings settings) {
+    this.settings = settings;
     this.store = store;
     this.auth = auth;
     this.sessions = sessions;
@@ -61,21 +65,29 @@ public final class Api {
   }
 
   public void register(HttpRouting.Builder routing) {
-    if (corsOrigin != null) {
-      routing.addFilter((chain, req, res) -> {
-        res.header(HeaderNames.create("Access-Control-Allow-Origin"), corsOrigin);
-        res.header(HeaderNames.create("Access-Control-Allow-Headers"), "Authorization, Content-Type");
-        res.header(HeaderNames.create("Access-Control-Allow-Methods"), "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-        if (req.prologue().method().text().equals("OPTIONS")) {
-          res.status(Status.NO_CONTENT_204).send();
-        } else {
-          chain.proceed();
+    // CSRF: a state-changing request must come from an allowed origin and be JSON (see CsrfGuard). Runs before any route.
+    routing.addFilter((chain, req, res) -> {
+      if (req.path().path().startsWith("/api/")) {
+        var verdict = CsrfGuard.check(
+            req.prologue().method().text(),
+            req.headers().first(HeaderNames.ORIGIN).orElse(null),
+            req.headers().first(HeaderNames.REFERER).orElse(null),
+            req.headers().first(HeaderNames.CONTENT_TYPE).orElse(null),
+            settings.allowedOrigins());
+        if (!verdict.allowed()) {
+          LOG.log(System.Logger.Level.WARNING, "[csrf] refused " + req.prologue().method().text() + " " + req.path().path()
+              + " (origin=" + abbreviate(req.headers().first(HeaderNames.ORIGIN).orElse("-")) + ", status " + verdict.status() + ")");
+          error(res, verdict.status(), verdict.message());
+          return;
         }
-      });
-    }
-    routing.get("/api/health", plain((req, res) -> json(res, 200, Map.of("status", "ok"))));
+      }
+      chain.proceed();
+    });
+    // Health checks from load balancers and uptime monitors are often HEAD requests, so answer both.
+    routing.route(HttpRoute.builder().methods(Method.GET, Method.HEAD).path("/api/health")
+        .handler(plain((req, res) -> json(res, 200, Map.of("status", "ok")))).build());
     routing.post("/api/auth/login", plain(this::login));
-    routing.post("/api/auth/logout", plain((req, res) -> res.status(Status.NO_CONTENT_204).send()));
+    routing.post("/api/auth/logout", plain(this::logout));
     routing.get("/api/auth/me", authed(null, (req, res, user) -> json(res, 200, Map.of("user", userJson(user)))));
     routing.post("/api/account/password", authed(null, this::changeMyPassword));
     routing.get("/api/admin/admins", authed(Role.admin, (req, res, user) -> json(res, 200, Map.of("admins", store.listAdmins()))));
@@ -87,6 +99,10 @@ public final class Api {
 
   private static void json(ServerResponse res, int status, Object body) {
     res.status(Status.create(status)).header(HeaderNames.CONTENT_TYPE, "application/json").header(HeaderNames.CACHE_CONTROL, "no-store").send(Json.write(body));
+  }
+
+  private static String abbreviate(String s) {
+    return s.length() <= 80 ? s : s.substring(0, 80) + "...";
   }
 
   private static void error(ServerResponse res, int status, String message) {
@@ -107,7 +123,7 @@ public final class Api {
   /** {@code role} null means any signed-in user. Signed out is 401; the wrong role is 403. */
   private io.helidon.webserver.http.Handler authed(Role role, Authed h) {
     return plain((req, res) -> {
-      var user = sessions.userFor(req.headers().first(HeaderNames.AUTHORIZATION).orElse(null));
+      var user = sessions.userForCookie(req.headers().first(HeaderNames.COOKIE).orElse(null));
       if (user.isEmpty()) {
         error(res, 401, "You are signed out. Sign in again.");
       } else if (role != null && user.get().role() != role) {
@@ -170,11 +186,19 @@ public final class Api {
     try {
       token = sessions.start(result.user());
     } catch (Sessions.ConfigError e) {
-      logFailure("missing-secret (SESSION_SECRET is unset or shorter than 32 characters)");
+      logFailure("missing-secret (LR_COOKIE_SECRET is unset or shorter than 32 characters)");
       error(res, 401, FAILED);
       return;
     }
-    json(res, 200, Map.of("token", token, "user", userJson(result.user())));
+    // The token travels only in the httpOnly cookie, never in the body, so a script can't read it.
+    res.header(HeaderNames.SET_COOKIE, Sessions.setCookie(token, settings.cookieSecure()));
+    json(res, 200, Map.of("user", userJson(result.user())));
+  }
+
+  /** Ends the session on this device by expiring the cookie. The token itself is stateless, as in the Node app. */
+  private void logout(ServerRequest req, ServerResponse res) {
+    res.header(HeaderNames.SET_COOKIE, Sessions.clearCookie(settings.cookieSecure()));
+    res.status(Status.NO_CONTENT_204).send();
   }
 
   /** Any signed-in user, for their own password only. The user comes from the session, never the body. */
@@ -187,8 +211,9 @@ public final class Api {
       json(res, 422, Map.of("errors", errors));
       return;
     }
-    // The old session stops working with the old password, so hand back a new one for this device.
-    json(res, 200, Map.of("token", sessions.start(user)));
+    // The old session stops working with the old password, so replace the cookie with a new one for this device.
+    res.header(HeaderNames.SET_COOKIE, Sessions.setCookie(sessions.start(user), settings.cookieSecure()));
+    json(res, 200, Map.of("ok", true));
   }
 
   // ------------------------------------------------------------------ admins

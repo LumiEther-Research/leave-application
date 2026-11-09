@@ -5,6 +5,8 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.text.Normalizer;
 import java.util.Base64;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.bouncycastle.crypto.generators.SCrypt;
 
 /**
@@ -23,9 +25,33 @@ public final class Password {
   private static final SecureRandom RANDOM = new SecureRandom();
   private static final Base64.Encoder B64 = Base64.getUrlEncoder().withoutPadding();
 
+  /**
+   * Each scrypt run needs about 16 MiB (128 * N * r bytes) for a moment and a full CPU core. Node ran them on libuv's
+   * four-thread pool, which quietly capped how many ran at once. Here every request is its own virtual thread, so
+   * without a cap a burst of sign-ins allocates 16 MiB each, all together, and the container is killed for running
+   * out of memory (seen in the stress test: 8 concurrent sign-ins on a 768 MB container). Extra requests wait their
+   * turn instead; throughput is the same, because the CPU was the limit anyway.
+   */
+  static final int SLOTS = Integer.getInteger("lumiether.scrypt.slots", Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())));
+  private static final Semaphore TURNS = new Semaphore(SLOTS);
+  private static final AtomicInteger ACTIVE = new AtomicInteger();
+  private static final AtomicInteger PEAK = new AtomicInteger();
+
+  /** The most scrypt runs that were ever going at once (for the test). */
+  static int peakConcurrent() {
+    return PEAK.get();
+  }
+
   private static byte[] derive(String password, byte[] salt) {
     byte[] pw = Normalizer.normalize(password, Normalizer.Form.NFKC).getBytes(StandardCharsets.UTF_8);
-    return SCrypt.generate(pw, salt, N, R, P, KEY_LENGTH);
+    TURNS.acquireUninterruptibly();
+    try {
+      PEAK.accumulateAndGet(ACTIVE.incrementAndGet(), Math::max);
+      return SCrypt.generate(pw, salt, N, R, P, KEY_LENGTH);
+    } finally {
+      ACTIVE.decrementAndGet();
+      TURNS.release();
+    }
   }
 
   public static String hash(String password) {
