@@ -11,7 +11,7 @@ until the rebuild is accepted. The new code lives in `backend/` (done so far) an
 | **Backend, Phase 1** (sign-in, sessions, change password, admins, health, migrations) | **Done.** Committed in `dc3e6d6`; since then, uncommitted: a cap on concurrent scrypt hashes, `HEAD /api/health`, the Docker packaging in `deploy/`, and the **cookie session** (`lr_session`, own secret `LR_COOKIE_SECRET`, `Origin` and JSON checks, no Bearer path, no CORS, `SESSION_SECRET` retired). 108 backend tests pass; the stress and correctness suite passes through the cookie flow. |
 | **Stress test** (sign-in ladders, 3,400 req/s signed-in traffic, concurrency races, hostile input, burst, 60 s soak) | **Passed** with 0 failed checks and 0 server errors on 2 CPUs / 768 MiB. Results and sizing are in `deploy/README.md`. |
 | **Docker** | **Backend image builds and runs.** The web image needs the frontend, which does not exist yet. |
-| **Frontend** | **Not started.** Stack decisions are made (section 7). Phase 1b starts it, after a small backend change to cookie sessions (H11). |
+| **Frontend** | **Started.** The Vite + TypeScript project and the shell (sidebar, drawer, header, theme toggle, loader, the shadcn parts it needs) are built, with 25 behaviour tests and a measured layout check against the current app. The login screen is next; the shell is shown to a stand-in user in development only. |
 | **Everything after Phase 1** (employees, leave, comp-off, permissions, dashboards, payslips, cron) | Not started. |
 
 ## 0. Ground rules
@@ -183,7 +183,8 @@ cookie, so no script on the page can read or copy it. That matters because this 
 sent automatically, so state-changing requests need CSRF protection, in layers: `SameSite=Lax` (a cross-site POST,
 PUT, PATCH or DELETE does not carry the cookie); the server rejects any POST, PUT, PATCH or DELETE whose `Origin`
 (or, failing that, `Referer`) is not in `ALLOWED_ORIGINS`, a config list (the public https address in production,
-`http://localhost:5173` in development); and it requires `Content-Type: application/json`. There is no CORS at
+`http://localhost:5173` in development, set by the developer in their own shell and never in the production env
+file); and it requires `Content-Type: application/json`. There is no CORS at
 all, so no other site can make credentialed calls, and the old `CORS_ORIGIN` option is removed. `Secure` comes from
 a config flag, `COOKIE_SECURE` (on in production behind Traefik's TLS, off on plain `http://localhost`). The cookie
 is signed with `LR_COOKIE_SECRET`, a separate secret from `SESSION_SECRET`; if it is unset or shorter than 32
@@ -220,7 +221,7 @@ validation, employee validation), `store.test.ts` groups "signing in", "changing
 `retry.test.ts`, migration idempotency, plus an HTTP-level suite. Docker image, compose and the stress harness.
 (The uncommitted hardening listed under Status is committed with Phase 1b.)
 
-**Phase 1b: Session cookie, then the frontend foundation. IN PROGRESS: the backend step is done, the frontend has not started.**
+**Phase 1b: Session cookie, then the frontend foundation. IN PROGRESS: the backend step and the frontend project and shell are done; the login, admins and change-password screens are next.**
 *Backend first (1 to 1.5 days, section 10) - done, awaiting review:* issue and clear the `lr_session` cookie, signed with
 the new `LR_COOKIE_SECRET` (added to `deploy/.env.example` and the compose file). `SESSION_SECRET` stays in the
 example env file, marked retired, and is no longer read or required. The `Origin` and content-type checks, drop the
@@ -296,6 +297,7 @@ HikariCP (Helidon has no pool of its own), Bouncy Castle (scrypt, H1), JUnit 5.
 | `vitest` | test runner | approved |
 | `@testing-library/react` | behaviour tests (Testing Library) | approved |
 | `@testing-library/user-event` (dev only) | simulates typing and clicking in tests | approved |
+| `@testing-library/dom` (dev only) | the DOM core that `@testing-library/react` requires as a peer; npm installs it automatically | approved |
 | `jsdom` (dev only) | the browser-like environment Vitest uses for component tests | approved |
 
 *Not a package:* the current app's `cn` package (shadcn's class-name merger) is not used; `cn()` is a small local
@@ -375,7 +377,7 @@ requires, not from hand-rolled code or the native `<dialog>`; pickers use the na
     app's styled one.
 16. **Accent colour: `#7F22FE`,** to match the live app. CLAUDE.md is updated.
 17. **Companion packages approved:** `react`, `react-dom`, `@types/react`, `@types/react-dom`, `jsdom`,
-    `@testing-library/user-event`.
+    `@testing-library/user-event`, and `@testing-library/dom` (the required peer of `@testing-library/react`).
 18. **shadcn components are allowed** with `@base-ui/react`, `class-variance-authority` and `tw-animate-css`. The
     CLAUDE.md rule against hand-rolling tables, dialogs, badges, inputs and toasts stays; CLAUDE.md is updated.
 19. **`SESSION_SECRET` is retired for the rebuild.** It stays in `deploy/.env.example`, marked retired; the backend
