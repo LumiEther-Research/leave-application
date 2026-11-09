@@ -1,0 +1,62 @@
+# web (nginx + the React site, proxies /api) -> backend (Helidon) -> Postgres.
+#   docker compose --env-file .env up -d                       # with an external Postgres (Neon)
+#   docker compose --env-file .env --profile local-db up -d    # with a throwaway local Postgres
+# The PDF service joins in the payslip phase; the backend has no payslip code yet.
+services:
+  web:
+    image: lumiether-web:${IMAGE_TAG:-latest}
+    build: ./.build/web
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_URL: http://backend:8081
+    ports:
+      - "${WEB_PORT:-8088}:80"
+    restart: unless-stopped
+    # Behind the VM's Traefik, replace `ports` with labels like these (entrypoint / network / resolver names are the VM's):
+    # labels:
+    #   - traefik.enable=true
+    #   - traefik.http.routers.lumiether.rule=Host(`leave.example.com`)
+    #   - traefik.http.routers.lumiether.entrypoints=websecure
+    #   - traefik.http.routers.lumiether.tls.certresolver=letsencrypt
+    #   - traefik.http.services.lumiether.loadbalancer.server.port=80
+
+  backend:
+    image: lumiether-backend:${IMAGE_TAG:-latest}
+    build: ./.build/backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      # The session cookie's own secret. SESSION_SECRET is retired for the rebuild and is not passed on.
+      LR_COOKIE_SECRET: ${LR_COOKIE_SECRET:?set LR_COOKIE_SECRET in .env (32+ random characters, not SESSION_SECRET)}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8088}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      CRON_SECRET: ${CRON_SECRET:-}
+      RUN_MIGRATIONS: "1"
+      # Extra JVM flags, appended to the image's defaults (later flags win). Normally empty.
+      JAVA_OPTS_EXTRA: ${JAVA_OPTS_EXTRA:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Limits must be set when the container is created, not afterwards with `docker update`: the JVM sizes its heap
+    # from the limit it sees at start (MaxRAMPercentage), and a later limit just gets it killed. The sign-in hash is
+    # CPU-heavy (about 30 sign-ins per second per 2 CPUs), so size CPUs for your peak sign-in rate.
+    mem_limit: ${BACKEND_MEMORY:-1g}
+    memswap_limit: ${BACKEND_MEMORY:-1g}
+    cpus: ${BACKEND_CPUS:-2}
+    expose:
+      - "8081"
+    restart: unless-stopped
+
+  postgres:
+    profiles: ["local-db"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: lumiether
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
