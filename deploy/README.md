@@ -46,7 +46,9 @@ Open `http://<host>:8088`. `GET /api/health` answers `{"status":"ok"}` (GET and 
   Because the cookie's name and secret differ from the current app's, everyone signs in again at cutover.
 * `ALLOWED_ORIGINS`: the public address(es) of the web container, comma separated (for example
   `https://leave.example.com`). POST, PUT, PATCH and DELETE requests from any other origin are refused with 403, and
-  they must be JSON (415 otherwise). If it is empty, no browser can sign in.
+  they must be JSON (415 otherwise). Compose has no default, so a missing value stops `docker compose up`. With
+  `COOKIE_SECURE=true` the backend refuses to start if the list holds `localhost`, `127.0.0.1` or `[::1]`. For a local
+  run on plain http set `COOKIE_SECURE=false` and `ALLOWED_ORIGINS=http://localhost:8088`.
 * `COOKIE_SECURE` (default true): adds `Secure` to the cookie. Leave it on behind TLS.
 * `ADMIN_EMAIL` / `ADMIN_PASSWORD_HASH`: bootstrap only. While the database has **no admins**, that account can sign
   in once and is saved as an ordinary admin. Make the hash with `printf '%s' 'password' | node scripts/hash-password.mjs`.

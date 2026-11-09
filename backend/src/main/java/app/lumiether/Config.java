@@ -23,12 +23,22 @@ public record Config(
     int port,
     String migrationsDir) {
 
+  /** Thrown at startup when the settings are unsafe. The message says what to change. */
+  public static final class Invalid extends IllegalStateException {
+    public Invalid(String message) {
+      super(message);
+    }
+  }
+
   public static Config fromEnv(Map<String, String> env) {
+    boolean secure = flag(env.get("COOKIE_SECURE"), true);
+    List<String> origins = origins(env.get("ALLOWED_ORIGINS"));
+    if (secure) rejectLocalOrigins(origins);
     return new Config(
         env.get("DATABASE_URL"),
         env.get("LR_COOKIE_SECRET"),
-        flag(env.get("COOKIE_SECURE"), true),
-        origins(env.get("ALLOWED_ORIGINS")),
+        secure,
+        origins,
         env.get("ADMIN_EMAIL"),
         env.get("ADMIN_PASSWORD_HASH"),
         env.get("PDF_SERVICE_URL"),
@@ -47,5 +57,28 @@ public record Config(
   static List<String> origins(String value) {
     if (value == null) return List.of();
     return Arrays.stream(value.split("[,\\s]+")).map(CsrfGuard::normalizeOrigin).filter(s -> !s.isEmpty()).distinct().toList();
+  }
+
+  /**
+   * With COOKIE_SECURE=true (production) a development origin such as the Vite server's http://localhost:5173 must not be
+   * trusted: any page a visitor opens on their own machine's localhost would pass the CSRF check. Refuse to start.
+   */
+  static void rejectLocalOrigins(List<String> origins) {
+    List<String> local = origins.stream().filter(Config::isLocalOrigin).toList();
+    if (!local.isEmpty()) {
+      throw new Invalid("ALLOWED_ORIGINS contains " + String.join(", ", local) + ", but COOKIE_SECURE is true (production). "
+          + "Remove localhost, 127.0.0.1 and [::1] from ALLOWED_ORIGINS and use only the public https address, "
+          + "or set COOKIE_SECURE=false for local development.");
+    }
+  }
+
+  /** True for a host of exactly localhost, 127.0.0.1 or [::1], with any scheme or port. */
+  static boolean isLocalOrigin(String origin) {
+    String rest = origin.contains("://") ? origin.substring(origin.indexOf("://") + 3) : origin;
+    int slash = rest.indexOf('/');
+    if (slash >= 0) rest = rest.substring(0, slash);
+    String host = rest.startsWith("[") ? rest.substring(0, rest.indexOf(']') < 0 ? rest.length() : rest.indexOf(']') + 1)
+        : rest.contains(":") ? rest.substring(0, rest.indexOf(':')) : rest;
+    return List.of("localhost", "127.0.0.1", "[::1]").contains(host);
   }
 }

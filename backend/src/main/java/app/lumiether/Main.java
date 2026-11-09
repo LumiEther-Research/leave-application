@@ -11,7 +11,14 @@ public final class Main {
   private Main() {}
 
   public static void main(String[] args) {
-    Config config = Config.fromEnv(System.getenv());
+    Config config;
+    try {
+      config = Config.fromEnv(System.getenv());
+    } catch (Config.Invalid e) {
+      System.err.println("FATAL: " + e.getMessage());
+      System.exit(1);
+      return;
+    }
     if (config.cookieSecret() == null || config.cookieSecret().length() < 32) {
       System.err.println("WARNING: LR_COOKIE_SECRET is not set to 32 or more characters, so nobody can sign in.");
     }
