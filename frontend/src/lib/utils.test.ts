@@ -4,7 +4,8 @@ import { initialsOf } from "./initials";
 
 describe("cn", () => {
   it("joins class names and skips falsy ones", () => {
-    expect(cn("a", false && "b", undefined, null, "c", { d: true, e: false })).toBe("a c d");
+    const off = Boolean(0); // a real condition would be a variable, not the literal false
+    expect(cn("a", off && "b", undefined, null, "c", { d: true, e: false })).toBe("a c d");
   });
 
   it("lets a later class win over an earlier conflicting one, so a passed className overrides a component's defaults", () => {

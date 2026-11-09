@@ -299,12 +299,22 @@ HikariCP (Helidon has no pool of its own), Bouncy Castle (scrypt, H1), JUnit 5.
 | `@testing-library/user-event` (dev only) | simulates typing and clicking in tests | approved |
 | `@testing-library/dom` (dev only) | the DOM core that `@testing-library/react` requires as a peer; npm installs it automatically | approved |
 | `jsdom` (dev only) | the browser-like environment Vitest uses for component tests | approved |
+| `eslint`, `@eslint/js`, `typescript-eslint`, `eslint-plugin-react-hooks` (dev only) | the `npm run lint` script (ESLint base rules, TypeScript rules, React hooks rules) | approved |
+| `typescript` pinned to 6.0.3 | `typescript-eslint` accepts only TypeScript below 6.1, so 7.x is not used until it supports it | approved |
 
 *Not a package:* the current app's `cn` package (shadcn's class-name merger) is not used; `cn()` is a small local
 helper built from the approved `clsx` and `tailwind-merge`. Likewise `shadcn/tailwind.css` is not imported: the
 current app takes it from the `shadcn` package, but it is a small CSS file of `@custom-variant` rules (`data-open`,
 `data-closed`, `data-checked`, and so on) that the dialog and drawer classes rely on. The variants the components
 actually use are copied by hand into our `globals.css` (with a comment crediting where they came from); no package.
+
+**Dependency audit (`frontend/`, 2026-11-09).** `npm audit --omit=dev` reports 0 vulnerabilities: nothing that ships to
+users is affected. `npm audit` (with dev tools) reports one advisory, GHSA-g3hv-75wg-m249 (minimatch 7.0.0 to below
+11.0.1, moderate, denial of service through glob pattern amplification), which npm counts as 10 entries because
+`eslint`, `@eslint/js`, `@eslint/config-array` and `typescript-eslint` with its sub-packages all depend on minimatch
+10.2.6. It affects only the developer's machine and CI while linting, never the built site. Fixed in minimatch 11.0.1
+or later. No version has been changed; `npm audit fix` is not run, because npm's suggestion is to downgrade ESLint to
+9.x. Waiting for a decision (see the open items).
 
 Inter is a self-hosted file under `frontend/public/fonts` with its OFL licence next to it, not a package. If the tests
 turn out to need `@testing-library/jest-dom` (extra matchers) I will ask first.
@@ -408,6 +418,9 @@ Total if all three are wanted: roughly 4.5 to 6.5 days.
    Phase 1b waits on these.
 2. **Native `<select>` or the styled one?** Decision 15 keeps the native one. Now that Base UI is approved, copying the
    current styled Select (five places) is cheap, about a quarter of a day. Tell me if you want it.
+3. **The minimatch advisory in the lint tools (dev only).** Options: leave it (it never reaches the built site), add an
+   npm `overrides` entry pinning minimatch to 11.0.1 or later (needs a check that ESLint 10 still runs), or wait for
+   ESLint and `typescript-eslint` to update. npm's own suggestion, downgrading ESLint to 9.x, is not recommended.
 
 ## 10. Effort budget (work the decisions add)
 
