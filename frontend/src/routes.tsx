@@ -1,14 +1,17 @@
-import { Link, Navigate, type RouteObject } from "react-router-dom";
-import { toast } from "sonner";
+import { Link, Outlet, redirect, useLoaderData, useNavigate, useNavigation, type RouteObject } from "react-router-dom";
 import { AppShell } from "@/components/layout/app-shell";
-import type { ShellUser } from "@/components/layout/header";
-import { navByRole, type NavItem, type Role } from "@/components/layout/nav-config";
+import { PageError, ShellError } from "@/components/layout/route-error";
+import { RunnerLoader } from "@/components/layout/runner-loader";
+import { navByRole, type NavItem } from "@/components/layout/nav-config";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { currentUser, homeFor, send, type Role, type SessionUser } from "@/lib/api";
 import { initialsOf } from "@/lib/initials";
+import { AdminsPage, adminsLoader } from "@/pages/admins";
+import { ChangePasswordPage } from "@/pages/change-password";
+import { LoginPage } from "@/pages/login";
 
 /** Which phase of docs/rebuild-plan.md brings each screen. */
 export function phaseFor(item: NavItem): string {
-  if (/\/(admins|password)$/.test(item.href)) return "Phase 1b, right after the login screen";
   if (/\/(employees|leave-policy|holidays)$/.test(item.href)) return "Phase 2";
   if (/\/(payslips)$/.test(item.href)) return "Phase 4";
   return "Phase 3";
@@ -40,36 +43,85 @@ function NotFound() {
   );
 }
 
-/**
- * Until the login screen exists there is no signed-in user, so the shell is shown to a stand-in user, in development
- * only. A production build refuses, so a deployed site can never show an admin-looking screen to anyone.
- */
-function previewUser(role: Role): ShellUser {
-  const name = role === "admin" ? "Preview Admin" : "Preview Employee";
-  return { name, initials: initialsOf(name), role };
+/** Every route change shows the running-figure loader (the current app's loading.tsx). Saving a form only revalidates, so it never flashes it. */
+function Root() {
+  const navigation = useNavigation();
+  return navigation.state === "loading" ? <RunnerLoader /> : <Outlet />;
 }
 
-function PreviewShell({ role }: { role: Role }) {
-  if (!import.meta.env.DEV) return <NotFound />;
-  return <AppShell user={previewUser(role)} onLogout={() => toast("Signing out is not wired up yet", { description: "It arrives with the login screen." })} />;
+/** Signed out goes to /login. The wrong role goes to its own home, as requireRole does in the current app. */
+function shellLoader(role: Role) {
+  return async (): Promise<SessionUser> => {
+    const user = await currentUser();
+    if (!user) throw redirect("/login");
+    if (user.role !== role) throw redirect(homeFor(user.role));
+    return user;
+  };
 }
+
+function Shell() {
+  const user = useLoaderData() as SessionUser;
+  const navigate = useNavigate();
+  async function logout() {
+    try {
+      await send("POST", "/api/auth/logout"); // the server expires the HttpOnly cookie
+    } finally {
+      navigate("/login", { replace: true });
+    }
+  }
+  return <AppShell user={{ name: user.name, initials: initialsOf(user.name), role: user.role }} onLogout={logout} />;
+}
+
+/** The pages that are built. Everything else in the nav is still a placeholder. */
+const built: Record<string, Pick<RouteObject, "element" | "loader">> = {
+  "/admin/admins": { element: <AdminsPage />, loader: adminsLoader },
+  "/admin/password": { element: <ChangePasswordPage /> },
+  "/employee/password": { element: <ChangePasswordPage /> },
+};
 
 function shellRoute(role: Role): RouteObject {
   const items = navByRole[role].flatMap((section) => section.items);
   return {
+    id: "shell-" + role,
     path: `/${role}`,
-    element: <PreviewShell role={role} />,
-    children: items.map((item) =>
-      item.href === `/${role}`
-        ? { index: true, element: <Placeholder item={item} /> }
-        : { path: item.href.slice(`/${role}/`.length), element: <Placeholder item={item} /> },
-    ),
+    loader: shellLoader(role),
+    element: <Shell />,
+    errorElement: <ShellError />,
+    children: items.map((item) => {
+      const page = built[item.href] ?? { element: <Placeholder item={item} /> };
+      return item.href === `/${role}`
+        ? { index: true, ...page, errorElement: <PageError /> }
+        : { path: item.href.slice(`/${role}/`.length), ...page, errorElement: <PageError /> };
+    }),
   };
 }
 
 export const appRoutes: RouteObject[] = [
-  { path: "/", element: <Navigate to="/admin" replace /> },
-  shellRoute("admin"),
-  shellRoute("employee"),
-  { path: "*", element: <NotFound /> },
+  {
+    element: <Root />,
+    errorElement: <ShellError />,
+    HydrateFallback: RunnerLoader,
+    children: [
+      {
+        path: "/",
+        loader: async () => {
+          const user = await currentUser();
+          throw redirect(user ? homeFor(user.role) : "/login");
+        },
+      },
+      {
+        path: "/login",
+        element: <LoginPage />,
+        // Already signed in? Skip the form.
+        loader: async () => {
+          const user = await currentUser();
+          if (user) throw redirect(homeFor(user.role));
+          return null;
+        },
+      },
+      shellRoute("admin"),
+      shellRoute("employee"),
+      { path: "*", element: <NotFound /> },
+    ],
+  },
 ];

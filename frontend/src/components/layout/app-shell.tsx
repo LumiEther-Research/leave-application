@@ -1,12 +1,15 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Header, type ShellUser } from "./header";
 import { PageTransition } from "./page-transition";
+import { useDocumentTitle } from "@/lib/document-title";
+import { getPageTitle } from "./nav-config";
 import { Sidebar } from "./sidebar";
 
 /** The layout route for a signed-in user: sidebar, sticky header, and the page in <main>. The active nav item comes from the URL. */
 export function AppShell({ user, onLogout }: { user: ShellUser; onLogout: () => void }) {
   const { pathname } = useLocation();
   const active = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  useDocumentTitle(getPageTitle(user.role, active));
 
   return (
     <div className="flex min-h-screen">

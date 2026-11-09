@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -9,7 +9,12 @@ import type { Role } from "./nav-config";
 /** The drawer is controlled so it closes when you pick a page: unlike a page-per-request app, the shell stays mounted. */
 export function MobileNav({ role, active }: { role: Role; active: string }) {
   const [open, setOpen] = useState(false);
-  useEffect(() => setOpen(false), [active]);
+  // Close when the page changes. Adjusting state while rendering (React's documented alternative to an effect) avoids a second render pass.
+  const [shownFor, setShownFor] = useState(active);
+  if (shownFor !== active) {
+    setShownFor(active);
+    setOpen(false);
+  }
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
