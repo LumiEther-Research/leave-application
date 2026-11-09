@@ -8,7 +8,7 @@ until the rebuild is accepted. The new code lives in `backend/` (done so far) an
 
 | Part | State |
 |---|---|
-| **Backend, Phase 1** (sign-in, sessions, change password, admins, health, migrations) | **Done and committed** (`dc3e6d6`). Since then, uncommitted: a cap on concurrent scrypt hashes, `HEAD /api/health`, and the Docker packaging in `deploy/`. 78 backend tests pass. |
+| **Backend, Phase 1** (sign-in, sessions, change password, admins, health, migrations) | **Done.** Committed in `dc3e6d6`; since then, uncommitted: a cap on concurrent scrypt hashes, `HEAD /api/health`, the Docker packaging in `deploy/`, and the **cookie session** (`lr_session`, own secret `LR_COOKIE_SECRET`, `Origin` and JSON checks, no Bearer path, no CORS, `SESSION_SECRET` retired). 108 backend tests pass; the stress and correctness suite passes through the cookie flow. |
 | **Stress test** (sign-in ladders, 3,400 req/s signed-in traffic, concurrency races, hostile input, burst, 60 s soak) | **Passed** with 0 failed checks and 0 server errors on 2 CPUs / 768 MiB. Results and sizing are in `deploy/README.md`. |
 | **Docker** | **Backend image builds and runs.** The web image needs the frontend, which does not exist yet. |
 | **Frontend** | **Not started.** Stack decisions are made (section 7). Phase 1b starts it, after a small backend change to cookie sessions (H11). |
@@ -25,8 +25,7 @@ until the rebuild is accepted. The new code lives in `backend/` (done so far) an
 - **The current app and `~/lumiether-website` are not touched.** The current app is only run, read-only in spirit,
   as the reference for behaviour and for pixel comparison.
 - **No dependency is added without your approval** (CLAUDE.md rule). Section 5 gives every package its status.
-  Everything on your lists is approved; one companion, the class-name merger `cn`, still needs a yes. Nothing is
-  installed until its line says "approved". "Plain React" means React and Vite with only those: no Next.js, no state
+  Everything on your lists is approved. Nothing is installed until its line says "approved". "Plain React" means React and Vite with only those: no Next.js, no state
   library. Styling is Tailwind CSS, with shadcn components built on Base UI.
 - **Employees never see their allowance, total or remaining days.** This was easy in Next (the page just
   didn't render it). With a JSON API it is a leak risk, so employee endpoints get their own response types
@@ -130,7 +129,7 @@ unchanged: the `:root` and `.dark` variable blocks (colour tokens, radii, shadow
 the loader's keyframes are kept, so colours match by construction and the components' class strings can be copied
 from the current app. The one import that changes is `shadcn/tailwind.css`: it comes from the `shadcn` package, which
 is not approved, so the handful of `@custom-variant` rules the components use (`data-open`, `data-closed` and
-similar) are copied into our own CSS by hand (section 9, item 2). Tailwind v4 is configured in the CSS file itself, so
+similar) are copied into our own CSS by hand, with no package (decision 21). Tailwind v4 is configured in the CSS file itself, so
 there is no `tailwind.config` and no PostCSS setup, only its Vite plugin. The measured sizes and spacings are in
 Appendix A.
 
@@ -221,8 +220,8 @@ validation, employee validation), `store.test.ts` groups "signing in", "changing
 `retry.test.ts`, migration idempotency, plus an HTTP-level suite. Docker image, compose and the stress harness.
 (The uncommitted hardening listed under Status is committed with Phase 1b.)
 
-**Phase 1b: Session cookie, then the frontend foundation. IN PROGRESS.**
-*Backend first (1 to 1.5 days, section 10) - the current step:* issue and clear the `lr_session` cookie, signed with
+**Phase 1b: Session cookie, then the frontend foundation. IN PROGRESS: the backend step is done, the frontend has not started.**
+*Backend first (1 to 1.5 days, section 10) - done, awaiting review:* issue and clear the `lr_session` cookie, signed with
 the new `LR_COOKIE_SECRET` (added to `deploy/.env.example` and the compose file). `SESSION_SECRET` stays in the
 example env file, marked retired, and is no longer read or required. The `Origin` and content-type checks, drop the
 Bearer path for user sessions and the CORS option, update the HTTP tests, switch the stress harness to a cookie jar
@@ -291,6 +290,7 @@ HikariCP (Helidon has no pool of its own), Bouncy Castle (scrypt, H1), JUnit 5.
 | `@base-ui/react` | the behaviour behind shadcn's dialog, drawer, avatar, button and select parts | approved |
 | `class-variance-authority` | the variants in shadcn components | approved |
 | `tw-animate-css` | the enter and exit animation classes the dialog and drawer use | approved |
+| `clsx` and `tailwind-merge` | joined in a three-line local `cn()` helper (`twMerge(clsx(...))`), so a component's own classes and the `className` passed to it resolve the way shadcn expects | approved |
 | `lucide-react` | the same icons as the current app, imported one by one | approved |
 | `sonner` | the same toasts as the current app | approved |
 | `vitest` | test runner | approved |
@@ -298,16 +298,11 @@ HikariCP (Helidon has no pool of its own), Bouncy Castle (scrypt, H1), JUnit 5.
 | `@testing-library/user-event` (dev only) | simulates typing and clicking in tests | approved |
 | `jsdom` (dev only) | the browser-like environment Vitest uses for component tests | approved |
 
-*Needs your yes before I install it:*
-
-| Package | Why | Status |
-|---|---|---|
-| `cn` | shadcn's small class-name merger, which every current component imports. Without a merger, a component's own classes and the `className` passed to it can both apply, and which one wins depends on the order of the stylesheet, so overrides (a smaller badge, a custom width) can silently fail. Alternative: `clsx` + `tailwind-merge`. | needs approval |
-
-*Not a package:* `shadcn/tailwind.css`. The current app imports it from the `shadcn` package (not approved). It is
-a small CSS file of `@custom-variant` rules (`data-open`, `data-closed`, `data-checked`, and so on) that the
-dialog and drawer classes rely on. Default: copy the variants the components use into our `globals.css` by hand, no
-package. Alternative: approve `shadcn` as a dev dependency for that one file.
+*Not a package:* the current app's `cn` package (shadcn's class-name merger) is not used; `cn()` is a small local
+helper built from the approved `clsx` and `tailwind-merge`. Likewise `shadcn/tailwind.css` is not imported: the
+current app takes it from the `shadcn` package, but it is a small CSS file of `@custom-variant` rules (`data-open`,
+`data-closed`, `data-checked`, and so on) that the dialog and drawer classes rely on. The variants the components
+actually use are copied by hand into our `globals.css` (with a comment crediting where they came from); no package.
 
 Inter is a self-hosted file under `frontend/public/fonts` with its OFL licence next to it, not a package. If the tests
 turn out to need `@testing-library/jest-dom` (extra matchers) I will ask first.
@@ -335,8 +330,8 @@ requires, not from hand-rolled code or the native `<dialog>`; pickers use the na
      `framer-motion` (never approved).
    - *shadcn (resolved):* CLAUDE.md said "shadcn/ui for all components". shadcn components are now allowed with the
      three approved packages (`@base-ui/react`, `class-variance-authority`, `tw-animate-css`), and CLAUDE.md says so,
-     keeping its rule against hand-rolling dialogs and the rest. Two details are still open: the `cn` helper and
-     `shadcn/tailwind.css` (section 9, items 1 and 2).
+     keeping its rule against hand-rolling dialogs and the rest. The `cn` helper and the
+     `shadcn/tailwind.css` are resolved (decisions 20 and 21).
 4. CLAUDE.md says "stop after each screen"; your message says stop after each phase. I'll stop per phase
    and send screenshots for all screens in it.
 5. **Accent colour (resolved).** CLAUDE.md named violet-600 `#7C3AED`, but the live app renders `#7F22FE` (light)
@@ -345,7 +340,7 @@ requires, not from hand-rolled code or the native `<dialog>`; pickers use the na
 ## 7. Decisions (answered)
 
 1. **Frontend: a React single-page app built with Vite, plain React, in TypeScript, with `react-router-dom`,
-   calling the Helidon JSON API.** The other choices are decisions 9 to 19.
+   calling the Helidon JSON API.** The other choices are decisions 9 to 21.
 2. **Hosting: the Oracle VM, Docker containers, behind the existing Traefik.** Containers: `web` (nginx serving
    the built frontend and proxying `/api`), `backend` (Helidon), later `pdf` (the existing `pdf-service`, unchanged,
    internal network only). Postgres, with the same schema and migrations, stays on Neon via `DATABASE_URL` (any
@@ -386,6 +381,8 @@ requires, not from hand-rolled code or the native `<dialog>`; pickers use the na
 19. **`SESSION_SECRET` is retired for the rebuild.** It stays in `deploy/.env.example`, marked retired; the backend
     does not read it and the compose file neither requires nor passes it. The current app, which still uses it, is
     unaffected.
+20. **Class merging: `clsx` and `tailwind-merge`,** approved, behind a local `cn()` helper. The `cn` package is not used.
+21. **`shadcn/tailwind.css`: its variants are copied by hand into our CSS,** no `shadcn` package.
 
 ## 8. CLAUDE.md-only features (not in the phases above)
 
@@ -404,15 +401,10 @@ Total if all three are wanted: roughly 4.5 to 6.5 days.
 
 ## 9. Still open
 
-1. **The class-name merger.** Approve `cn` (the current app's), or `clsx` + `tailwind-merge`, or neither, in which case I
-   write a small helper by hand and class overrides need care (about half a day extra). Needed before the shadcn
-   components are copied. The backend step does not wait on it.
-2. **`shadcn/tailwind.css`.** Copy the variants the components use into our own CSS by hand (default, no package), or
-   approve the `shadcn` package for that one file.
-3. **Deployment details (from you, when you have them):** the Traefik entrypoint, network and cert-resolver names, the
+1. **Deployment details (from you, when you have them):** the Traefik entrypoint, network and cert-resolver names, the
    domain, the container registry (or building on the VM), and the VM's time zone for the cron job. Nothing in
    Phase 1b waits on these.
-4. **Native `<select>` or the styled one?** Decision 15 keeps the native one. Now that Base UI is approved, copying the
+2. **Native `<select>` or the styled one?** Decision 15 keeps the native one. Now that Base UI is approved, copying the
    current styled Select (five places) is cheap, about a quarter of a day. Tell me if you want it.
 
 ## 10. Effort budget (work the decisions add)
@@ -429,8 +421,7 @@ section 8 estimates are unchanged.
 The styling figure assumes the shadcn components (`components/ui`, 15 files, three never used) and the feature
 components are copied from the current app with their class strings, and checked screen by screen against it using the
 numbers in Appendix A. It covers Tailwind and token setup, the hand-copied custom variants, the page-in transition, and
-the final pixel pass. It also assumes a class-name merger is approved (section 9, item 1); without one, add about half a
-day. These days are for styling and sit alongside the logic work each phase already covers.
+the final pixel pass. It also assumes the `cn()` helper from the approved `clsx` and `tailwind-merge`. These days are for styling and sit alongside the logic work each phase already covers.
 
 If all three section 8 features are wanted as well, the total becomes 8.5 to 12 days.
 
