@@ -1,7 +1,7 @@
 # web (nginx + the React site, proxies /api) -> backend (Helidon) -> Postgres.
 #   docker compose --env-file .env up -d                       # with an external Postgres (Neon)
 #   docker compose --env-file .env --profile local-db up -d    # with a throwaway local Postgres
-# The PDF service joins in the payslip phase; the backend has no payslip code yet.
+# pdf: HTML -> PDF, reachable only from the backend over the internal `pdf` network (no ports, no secrets, no internet).
 services:
   web:
     image: lumiether-web:${IMAGE_TAG:-latest}
@@ -38,6 +38,7 @@ services:
       RUN_MIGRATIONS: "1"
       # Extra JVM flags, appended to the image's defaults (later flags win). Normally empty.
       JAVA_OPTS_EXTRA: ${JAVA_OPTS_EXTRA:-}
+      PDF_SERVICE_URL: http://pdf:8080
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Limits must be set when the container is created, not afterwards with `docker update`: the JVM sizes its heap
@@ -48,6 +49,31 @@ services:
     cpus: ${BACKEND_CPUS:-2}
     expose:
       - "8081"
+    networks: [default, pdf]
+    depends_on:
+      pdf:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pdf:
+    # Pinned: this is the tag the image was built and archived under (the commit it was built from), not `latest`.
+    image: lumiether-pdf:${PDF_IMAGE_TAG:-ec0f4e4}
+    build:
+      context: ../pdf-service
+      dockerfile: Dockerfile
+    # Only on the internal network shared with the backend: no published ports, no outbound access, no environment.
+    networks: [pdf]
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
 
   postgres:
@@ -58,6 +84,10 @@ services:
       POSTGRES_DB: lumiether
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+networks:
+  pdf:
+    internal: true
 
 volumes:
   pgdata:

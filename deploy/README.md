@@ -7,8 +7,8 @@ Two images, one compose file.
 | `lumiether-web` | nginx serving the React (Vite) build, and proxying `/api` to the backend. **The only thing the outside world talks to.** | not built yet (see below) |
 | `lumiether-backend` | The Helidon server (Java 21, non-root). Applies `db/migrations` on start when `RUN_MIGRATIONS=1`. | ~237 MB |
 
-Postgres is not in an image: use your Neon database (or any Postgres). The PDF service is not part of this yet,
-because the backend has no payslip code until the payslip phase.
+Postgres is not in an image: use your Neon database (or any Postgres). The PDF service (`lumiether-pdf`, from `pdf-service/Dockerfile`) is in the compose file on an internal network, pinned by `PDF_IMAGE_TAG`;
+the backend has no payslip code until the payslip phase, so nothing calls it yet.
 
 ## What this contains, and what it does not
 
