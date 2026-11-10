@@ -68,7 +68,7 @@ describe("the admin shell", () => {
   });
 
   it("says which phase brings a screen that is not built yet", async () => {
-    await renderApp("/admin/employees");
+    await renderApp("/admin/holidays");
     expect(screen.getByText(/has not been rebuilt yet. It arrives in Phase 2/)).toBeTruthy();
   });
 });

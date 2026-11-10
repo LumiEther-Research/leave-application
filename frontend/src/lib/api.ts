@@ -54,3 +54,15 @@ export async function currentUser(): Promise<SessionUser | null> {
   if (reply.status !== 200 || !user) throw new ApiError(reply.status, reply.body);
   return user;
 }
+
+/** One row of the admin's Employees list. Salary and designation are payroll details only admins see. */
+export type EmployeeRow = {
+  id: string;
+  name: string;
+  email: string;
+  category: string;
+  joiningDate: string;
+  designation: string | null;
+  /** plain "16500.00", or null when not set */
+  monthlySalary: string | null;
+};

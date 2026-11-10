@@ -74,6 +74,43 @@ public final class Store {
     return getEmployees().stream().filter(e -> e.id().equals(row.str("id"))).findFirst().orElseThrow();
   }
 
+  /** What the admin's Employees screen shows: the employee plus the payroll details only admins see. */
+  public record EmployeeRecord(
+      String id, String name, String email, String category, String joiningDate, String designation, String monthlySalary) {}
+
+  /** In the order they were added. {@code monthlySalary} is the plain "16500.00" the column holds, or null. */
+  public List<EmployeeRecord> listEmployeesWithPayroll() {
+    return db.query(
+            "select id, name, email, category, joining_date::text as \"joiningDate\", designation, "
+                + "monthly_salary::text as \"monthlySalary\" from employees order by created_at, name")
+        .stream()
+        .map(r -> new EmployeeRecord(r.str("id"), r.str("name"), r.str("email"), r.str("category"), r.str("joiningDate"),
+            r.str("designation"), r.str("monthlySalary")))
+        .toList();
+  }
+
+  /** Moves an employee to another category, which changes how many leave days they get. */
+  public boolean setEmployeeCategory(String id, String category) {
+    if (!Db.isUuid(id) || !app.lumiether.domain.Types.CATEGORIES.contains(category)) return false;
+    return !db.query("update employees set category = $2 where id = $1 returning id", id, category).isEmpty();
+  }
+
+  /**
+   * Admin only (the caller checks). Permanently removes the employee and, with them, their leave, comp-off,
+   * permissions and payslips. Their session stops working on its next request. False if they don't exist.
+   */
+  public boolean deleteEmployee(String id) {
+    if (!Db.isUuid(id)) return false;
+    return !db.query("delete from employees where id = $1 returning id", id).isEmpty();
+  }
+
+  /** Admin only (the caller checks and validates). Saves the salary and designation shown on payslips. */
+  public boolean setEmployeePayroll(String id, String monthlySalary, String designation) {
+    if (!Db.isUuid(id)) return false;
+    return !db.query("update employees set monthly_salary = $2, designation = $3 where id = $1 returning id", id, monthlySalary, designation)
+        .isEmpty();
+  }
+
   public boolean setEmployeePasswordHash(String id, String hash) {
     if (!Db.isUuid(id)) return false;
     return !db.query("update employees set password_hash = $2 where id = $1 returning id", id, hash).isEmpty();

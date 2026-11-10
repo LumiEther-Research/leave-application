@@ -8,6 +8,7 @@ import app.lumiether.auth.Token.Role;
 import app.lumiether.db.Db;
 import app.lumiether.db.Store;
 import app.lumiether.domain.Employees;
+import app.lumiether.domain.Types;
 import app.lumiether.domain.Types.Admin;
 import app.lumiether.domain.Types.SessionUser;
 import app.lumiether.domain.Validated;
@@ -93,6 +94,11 @@ public final class Api {
     routing.get("/api/admin/admins", authed(Role.admin, (req, res, user) -> json(res, 200, Map.of("admins", store.listAdmins()))));
     routing.post("/api/admin/admins", authed(Role.admin, this::addAdmin));
     routing.delete("/api/admin/admins/{id}", authed(Role.admin, this::removeAdmin));
+    routing.get("/api/admin/employees", authed(Role.admin, (req, res, user) -> json(res, 200, Map.of("employees", store.listEmployeesWithPayroll()))));
+    routing.post("/api/admin/employees", authed(Role.admin, this::addEmployee));
+    routing.patch("/api/admin/employees/{id}/category", authed(Role.admin, this::changeCategory));
+    routing.patch("/api/admin/employees/{id}/payroll", authed(Role.admin, this::updatePayroll));
+    routing.delete("/api/admin/employees/{id}", authed(Role.admin, this::removeEmployee));
   }
 
   // ---------------------------------------------------------------- plumbing
@@ -250,5 +256,73 @@ public final class Api {
     Store.Result result = auth.removeAdmin(user, req.path().pathParameters().get("id"));
     if (result.ok()) json(res, 200, Map.of("ok", true));
     else error(res, 409, result.error());
+  }
+
+  // --------------------------------------------------------------- employees
+
+  /** Admin only. The admin chooses the temporary password; only its hash is stored. */
+  private void addEmployee(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    // Sent back on failure so the fields keep what was typed (never the password).
+    Map<String, String> values = new LinkedHashMap<>();
+    for (String key : List.of("email", "joiningDate", "category", "monthlySalary", "designation")) values.put(key, Json.text(body, key));
+
+    Validated<Employees.NewEmployeeValue> result = Employees.validateNewEmployee(
+        new Employees.NewEmployeeInput(values.get("email"), values.get("joiningDate"), Json.text(body, "password"),
+            values.get("category"), values.get("monthlySalary"), values.get("designation")),
+        auth.isEmailInUse(values.get("email")) ? List.of(values.get("email")) : List.of());
+    if (!result.ok()) {
+      json(res, 422, Map.of("errors", result.errors(), "values", values));
+      return;
+    }
+    Employees.NewEmployeeValue v = result.value();
+    try {
+      var employee = store.createEmployee(new Store.NewEmployee(
+          Employees.nameFromEmail(v.email()), v.email(), v.joiningDate(), Password.hash(v.password()), v.category(), v.monthlySalary(), v.designation()));
+      json(res, 201, Map.of("created", Map.of("name", employee.name(), "email", employee.email())));
+    } catch (RuntimeException e) {
+      // Two people adding the same email at once: the unique index lets only one through.
+      if (Db.isUniqueViolation(e)) {
+        json(res, 422, Map.of("errors", Map.of("email", "Someone already uses this email."), "values", values));
+      } else {
+        LOG.log(System.Logger.Level.ERROR, "couldn't add employee", e);
+        json(res, 500, Map.of("error", "Couldn't add the employee. Please try again.", "values", values));
+      }
+    }
+  }
+
+  /** Admin only. Moving an employee to another category changes how many leave days they get. */
+  private void changeCategory(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    if (!Types.CATEGORIES.contains(Json.text(body, "category"))) {
+      error(res, 422, "Choose a category.");
+    } else if (!store.setEmployeeCategory(req.path().pathParameters().get("id"), Json.text(body, "category"))) {
+      error(res, 404, "That employee no longer exists.");
+    } else {
+      json(res, 200, Map.of("ok", true));
+    }
+  }
+
+  /** Admin only. Saves the monthly salary and designation shown on payslips. Empty clears a value. */
+  private void updatePayroll(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    Validated<Employees.PayrollValue> result =
+        Employees.validatePayroll(new Employees.PayrollInput(Json.text(body, "monthlySalary"), Json.text(body, "designation")));
+    if (!result.ok()) {
+      json(res, 422, Map.of("errors", result.errors()));
+    } else if (!store.setEmployeePayroll(req.path().pathParameters().get("id"), result.value().monthlySalary(), result.value().designation())) {
+      error(res, 404, "That employee no longer exists.");
+    } else {
+      json(res, 200, Map.of("ok", true));
+    }
+  }
+
+  /** Admin only. Permanently removes the employee and everything of theirs: leave, comp-off, permissions, payslips. */
+  private void removeEmployee(ServerRequest req, ServerResponse res, SessionUser user) {
+    if (store.deleteEmployee(req.path().pathParameters().get("id"))) json(res, 200, Map.of("ok", true));
+    else error(res, 404, "That employee no longer exists.");
   }
 }

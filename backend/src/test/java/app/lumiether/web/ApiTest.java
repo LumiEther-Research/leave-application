@@ -265,6 +265,151 @@ class ApiTest {
     assertEquals(409, call("DELETE", "/api/admin/admins/" + bossId, token, null).status()); // and the last admin can't go
   }
 
+  // --------------------------------------------------------------- employees
+
+  static Map<String, Object> newEmployee(String email) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("email", email);
+    m.put("joiningDate", "2026-01-05");
+    m.put("category", "intern");
+    m.put("monthlySalary", "16500.5");
+    m.put("designation", "  Engineer ");
+    m.put("password", "temp-pass-1");
+    return m;
+  }
+
+  @Test
+  void theEmployeeRoutesAreForAdminsOnly() throws Exception {
+    makeAdmin("Boss");
+    makeEmployee("Priya");
+    String id = store.getEmployees().get(0).id();
+    String employee = signIn("priya@gmail.com", "temp-pass-1");
+    for (String[] route : new String[][] {
+      {"GET", "/api/admin/employees"}, {"POST", "/api/admin/employees"},
+      {"PATCH", "/api/admin/employees/" + id + "/category"}, {"PATCH", "/api/admin/employees/" + id + "/payroll"},
+      {"DELETE", "/api/admin/employees/" + id}}) {
+      assertEquals(401, call(route[0], route[1], null, Map.of()).status(), "signed out: " + route[1]);
+      assertEquals(403, call(route[0], route[1], employee, Map.of()).status(), "employee: " + route[1]);
+    }
+    assertEquals(1, store.getEmployees().size()); // and nothing happened
+  }
+
+  @Test
+  void addingAnEmployeeSavesCleanedValuesDerivesTheNameAndLetsThemSignInWithTheTemporaryPassword() throws Exception {
+    makeAdmin("Boss");
+    String admin = signIn("boss@example.com", "admin-pass-1");
+    Res created = call("POST", "/api/admin/employees", admin, newEmployee(" Priya.Sharma@Gmail.com "));
+    assertEquals(201, created.status(), created.raw());
+    assertEquals("Priya Sharma", created.body().at("/created/name").asText());
+    assertEquals("priya.sharma@gmail.com", created.body().at("/created/email").asText());
+    assertFalse(created.raw().contains("temp-pass-1"));
+
+    JsonNode e = call("GET", "/api/admin/employees", admin, null).body().at("/employees/0");
+    assertEquals("intern", e.get("category").asText());
+    assertEquals("2026-01-05", e.get("joiningDate").asText());
+    assertEquals("16500.50", e.get("monthlySalary").asText());
+    assertEquals("Engineer", e.get("designation").asText());
+    assertFalse(e.toString().contains("assword"));
+
+    String own = signIn("priya.sharma@gmail.com", "temp-pass-1");
+    assertEquals("employee", call("GET", "/api/auth/me", own, null).body().at("/user/role").asText());
+  }
+
+  @Test
+  void aBadEmployeeIsRefusedWithEveryMessageAtOnceAndNothingIsSaved() throws Exception {
+    makeAdmin("Boss");
+    String admin = signIn("boss@example.com", "admin-pass-1");
+    Map<String, Object> bad = new LinkedHashMap<>(newEmployee("someone@yahoo.com"));
+    bad.put("joiningDate", "1999-12-31");
+    bad.put("category", "manager");
+    bad.put("password", "short");
+    bad.put("monthlySalary", "0");
+    bad.put("designation", "x".repeat(101));
+    Res r = call("POST", "/api/admin/employees", admin, bad);
+    assertEquals(422, r.status());
+    JsonNode errors = r.body().get("errors");
+    assertEquals("Enter a Gmail address, like name@gmail.com.", errors.get("email").asText());
+    assertEquals("That joining date is too far back.", errors.get("joiningDate").asText());
+    assertEquals("Choose a category.", errors.get("category").asText());
+    assertEquals("Use at least 8 characters.", errors.get("password").asText());
+    assertEquals("Enter a positive amount with at most two decimals, like 16500 or 16500.50.", errors.get("monthlySalary").asText());
+    assertEquals("Use at most 100 characters.", errors.get("designation").asText());
+    // the fields keep what was typed, but the password is never sent back
+    assertEquals("someone@yahoo.com", r.body().at("/values/email").asText());
+    assertEquals("1999-12-31", r.body().at("/values/joiningDate").asText());
+    assertFalse(r.body().get("values").has("password"));
+    assertFalse(r.raw().contains("short"));
+    assertEquals(0, store.getEmployees().size());
+  }
+
+  @Test
+  void anEmailAnAdminOrEmployeeAlreadyUsesCantBeUsedForAnEmployeeWhateverItsCase() throws Exception {
+    makeAdmin("Boss");
+    makeEmployee("Priya");
+    String admin = signIn("boss@example.com", "admin-pass-1");
+    Res dup = call("POST", "/api/admin/employees", admin, newEmployee("PRIYA@gmail.com"));
+    assertEquals(422, dup.status());
+    assertEquals("Someone already uses this email.", dup.body().at("/errors/email").asText());
+    // an admin's address would be refused for being non-Gmail first; an employee address equal to the bootstrap email is taken
+    bootstrap.set(new Auth.Bootstrap("boot@gmail.com", Password.hash("env-password-1")));
+    Res boot = call("POST", "/api/admin/employees", admin, newEmployee("Boot@Gmail.com"));
+    assertEquals("Someone already uses this email.", boot.body().at("/errors/email").asText());
+    assertEquals(1, store.getEmployees().size());
+  }
+
+  @Test
+  void changingACategoryNeedsARealCategoryAndARealEmployee() throws Exception {
+    makeAdmin("Boss");
+    makeEmployee("Priya");
+    String admin = signIn("boss@example.com", "admin-pass-1");
+    String id = store.getEmployees().get(0).id();
+    assertEquals(200, call("PATCH", "/api/admin/employees/" + id + "/category", admin, Map.of("category", "student")).status());
+    assertEquals("student", store.getEmployees().get(0).category());
+    Res bad = call("PATCH", "/api/admin/employees/" + id + "/category", admin, Map.of("category", "manager"));
+    assertEquals(422, bad.status());
+    assertEquals("Choose a category.", bad.body().get("error").asText());
+    Res gone = call("PATCH", "/api/admin/employees/00000000-0000-4000-8000-000000000001/category", admin, Map.of("category", "intern"));
+    assertEquals(404, gone.status());
+    assertEquals("That employee no longer exists.", gone.body().get("error").asText());
+    assertEquals(404, call("PATCH", "/api/admin/employees/not-a-uuid/category", admin, Map.of("category", "intern")).status());
+    assertEquals("student", store.getEmployees().get(0).category());
+  }
+
+  @Test
+  void payrollDetailsAreValidatedSavedTrimmedAndClearedByBlankFields() throws Exception {
+    makeAdmin("Boss");
+    makeEmployee("Priya");
+    String admin = signIn("boss@example.com", "admin-pass-1");
+    String path = "/api/admin/employees/" + store.getEmployees().get(0).id() + "/payroll";
+    assertEquals(200, call("PATCH", path, admin, Map.of("monthlySalary", " 1,65,000 ", "designation", " Lead ")).status());
+    assertEquals("165000.00", store.listEmployeesWithPayroll().get(0).monthlySalary());
+    Res bad = call("PATCH", path, admin, Map.of("monthlySalary", "12.345", "designation", "ok"));
+    assertEquals(422, bad.status());
+    assertEquals("Enter a positive amount with at most two decimals, like 16500 or 16500.50.", bad.body().at("/errors/monthlySalary").asText());
+    assertEquals("Lead", store.listEmployeesWithPayroll().get(0).designation()); // a refused save changes nothing
+    assertEquals(200, call("PATCH", path, admin, Map.of("monthlySalary", "", "designation", "  ")).status());
+    assertNull(store.listEmployeesWithPayroll().get(0).monthlySalary());
+    assertNull(store.listEmployeesWithPayroll().get(0).designation());
+    Res gone = call("PATCH", "/api/admin/employees/00000000-0000-4000-8000-000000000001/payroll", admin, Map.of("monthlySalary", "", "designation", ""));
+    assertEquals(404, gone.status());
+    assertEquals("That employee no longer exists.", gone.body().get("error").asText());
+  }
+
+  @Test
+  void removingAnEmployeeSignsThemOutAndAskingAgainSaysTheyAreGone() throws Exception {
+    makeAdmin("Boss");
+    makeEmployee("Priya");
+    String admin = signIn("boss@example.com", "admin-pass-1");
+    String own = signIn("priya@gmail.com", "temp-pass-1");
+    String id = store.getEmployees().get(0).id();
+    assertEquals(200, call("DELETE", "/api/admin/employees/" + id, admin, null).status());
+    assertEquals(401, call("GET", "/api/auth/me", own, null).status());
+    Res again = call("DELETE", "/api/admin/employees/" + id, admin, null);
+    assertEquals(404, again.status());
+    assertEquals("That employee no longer exists.", again.body().get("error").asText());
+    assertEquals(0, store.getEmployees().size());
+  }
+
   // ---------------------------------------------------------- password change
 
   @Test

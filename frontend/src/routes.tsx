@@ -8,6 +8,7 @@ import { currentUser, homeFor, send, type Role, type SessionUser } from "@/lib/a
 import { initialsOf } from "@/lib/initials";
 import { AdminsPage, adminsLoader } from "@/pages/admins";
 import { ChangePasswordPage } from "@/pages/change-password";
+import { EmployeesPage, employeesLoader } from "@/pages/employees";
 import { LoginPage } from "@/pages/login";
 
 /** Which phase of docs/rebuild-plan.md brings each screen. */
@@ -75,6 +76,7 @@ function Shell() {
 /** The pages that are built. Everything else in the nav is still a placeholder. */
 const built: Record<string, Pick<RouteObject, "element" | "loader">> = {
   "/admin/admins": { element: <AdminsPage />, loader: adminsLoader },
+  "/admin/employees": { element: <EmployeesPage />, loader: employeesLoader },
   "/admin/password": { element: <ChangePasswordPage /> },
   "/employee/password": { element: <ChangePasswordPage /> },
 };
