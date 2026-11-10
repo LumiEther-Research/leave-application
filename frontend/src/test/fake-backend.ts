@@ -21,6 +21,24 @@ export type Call = { method: string; path: string; credentials?: RequestCredenti
 
 export const FAILED = "Incorrect email or password.";
 
+/** A leave request or comp-off claim as the fake keeps it. `days` is what the real backend works out; the tests set it. */
+export type FakeRequest = {
+  id: string;
+  employeeId: string;
+  type: "Casual leave" | "Sick leave" | "Comp-off";
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  from: string;
+  to: string;
+  appliedOn: string;
+  halfDay?: boolean;
+  cancelRequested?: boolean;
+  cancelRequestedOn?: string | null;
+  days: number;
+  expiresOn?: string;
+};
+
+export type FakePermission = { id: string; employeeId: string; date: string; from: string; to: string; minutes: number; reason: string };
+
 export class FakeBackend {
   users: FakeUser[] = [
     { id: "a1", name: "Priya Sharma", email: "priya@lumiether.test", role: "admin", password: "correct-horse" },
@@ -43,8 +61,26 @@ export class FakeBackend {
   forced: Record<string, number> = {};
   /** Make the backend refuse removing anyone with this message (a race the page can't see coming). */
   removalRefusal: string | null = null;
+  /** The team's "today" (a Wednesday), like the backend's clock in ApiTest. */
+  today = "2026-11-04";
+  requests: FakeRequest[] = [];
+  permissions: FakePermission[] = [];
+  policy: Record<string, number> = { contractor: 24, employee: 24, intern: 24, student: 24 };
+  /** What the backend works out for the dashboards (its engine is tested there); the fake serves these. */
+  employeeDashboard = {
+    year: 2026,
+    applied: { approved: 3, pending: 2.5, total: 5.5 },
+    compOff: { available: 1.5, waiting: 0 },
+  };
+  adminDashboard = {
+    year: 2026, today: "2026-11-04", hour: 10, teamSize: 2, outTodayCount: 1, pendingLeaveCount: 1,
+    outThisWeek: [] as unknown[], monthly: [] as { month: string; approved: number; pending: number }[],
+    balances: [] as unknown[],
+  };
   /** Make the next valid employee save fail with a server error. */
   failNextAdd = false;
+  /** Make the next leave request fail the balance check. */
+  overdrawn = false;
   /** Hold every reply until release() is called, to look at the page while a request is running. */
   private gate: Promise<void> | null = null;
   private open: (() => void) | null = null;
@@ -158,6 +194,8 @@ export class FakeBackend {
       this.users = this.users.filter((u) => u.id !== delEmployee[1]);
       return this.json(200, { ok: true });
     }
+    const leaveReply = this.leaveRoutes(method, path, body, me);
+    if (leaveReply) return leaveReply;
     const del = path.match(/^\/api\/admin\/admins\/(.+)$/);
     if (method === "DELETE" && del) {
       const id = decodeURIComponent(del[1]);
@@ -169,6 +207,148 @@ export class FakeBackend {
       return this.json(200, { ok: true });
     }
     return this.json(404, { error: "Not found" });
+  }
+
+  private nameOf(id: string) {
+    return this.users.find((u) => u.id === id)?.name ?? "Unknown";
+  }
+
+  private holidayList() {
+    return [
+      { name: "Republic Day", date: "2027-01-26", daysAway: 83 },
+      { name: "Labour Day", date: "2027-05-01", daysAway: 178 },
+      { name: "Independence Day", date: "2027-08-15", daysAway: 284 },
+      { name: "Gandhi Jayanti", date: "2027-10-02", daysAway: 332 },
+    ];
+  }
+
+  private requestView(r: FakeRequest) {
+    const comp = r.type === "Comp-off";
+    const cancel = comp ? null : r.status === "pending" ? "withdraw" : r.status === "approved" && !r.cancelRequested && r.from >= this.today ? "request" : null;
+    return {
+      ...r, employeeName: this.nameOf(r.employeeId), halfDay: !!r.halfDay, cancelRequested: !!r.cancelRequested,
+      cancelRequestedOn: r.cancelRequestedOn ?? null, cancel,
+    };
+  }
+
+  private newestFirst(list: FakeRequest[]) {
+    return [...list].sort((a, b) => b.appliedOn.localeCompare(a.appliedOn) || b.from.localeCompare(a.from));
+  }
+
+  /** The leave, comp-off, permission, holiday and policy routes, with the backend's status codes and messages. */
+  private leaveRoutes(method: string, path: string, body: Record<string, string>, me: FakeUser): Response | null {
+    const asEmployee = me.role === "employee";
+    if (path.startsWith("/api/employee/") && !asEmployee) return this.json(403, { error: "You don't have access to that." });
+    if (method === "GET" && path === "/api/holidays") return this.json(200, { holidays: this.holidayList() });
+    if (method === "GET" && path === "/api/employee/dashboard") return this.json(200, { ...this.employeeDashboard, holidays: this.holidayList() });
+    if (method === "GET" && path === "/api/employee/leave") {
+      return this.json(200, { requests: this.newestFirst(this.requests.filter((r) => r.employeeId === me.id && r.type !== "Comp-off")).map((r) => this.requestView(r)) });
+    }
+    if (method === "GET" && path === "/api/employee/comp-off") {
+      return this.json(200, { requests: this.newestFirst(this.requests.filter((r) => r.employeeId === me.id && r.type === "Comp-off")).map((r) => this.requestView(r)) });
+    }
+    if (method === "POST" && path === "/api/employee/leave") {
+      const errors: Record<string, string> = {};
+      const half = body.dayLength === "half";
+      const to = half ? body.from : body.to;
+      if (!["Casual leave", "Sick leave"].includes(body.type)) errors.type = "Choose casual or sick leave.";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.from)) errors.from = "Pick a start date.";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) errors.to = "Pick an end date.";
+      if (!errors.from && !errors.to && to < body.from) errors.to = "The end date can't be before the start date.";
+      if (!errors.from && !errors.to && this.requests.some((r) => r.employeeId === me.id && r.type !== "Comp-off" && ["pending", "approved"].includes(r.status) && r.from <= to && r.to >= body.from)) {
+        errors.form = "You already have leave that overlaps these dates.";
+      }
+      if (!errors.from && !errors.to && !errors.form && this.overdrawn) errors.form = "You don't have enough leave left for these dates. Ask your admin if you need more.";
+      const values = { from: body.from, to: body.to };
+      if (Object.keys(errors).length) return this.json(422, { errors, values });
+      this.requests.push({ id: `r${this.requests.length + 1}`, employeeId: me.id, type: body.type as FakeRequest["type"], status: "pending", from: body.from, to, appliedOn: this.today, halfDay: half, days: half ? 0.5 : 1 });
+      return this.json(201, { submitted: { type: body.type, from: body.from, to, halfDay: half } });
+    }
+    const cancel = path.match(/^\/api\/employee\/leave\/(.+)\/cancel$/);
+    if (method === "POST" && cancel) {
+      const r = this.requests.find((x) => x.id === cancel[1] && x.employeeId === me.id);
+      if (!r) return this.json(409, { error: "We couldn't find that request." });
+      if (r.status === "pending") {
+        r.status = "cancelled";
+        return this.json(200, { ok: true, action: "withdraw" });
+      }
+      if (r.status === "approved" && r.cancelRequested) return this.json(409, { error: "You've already asked to cancel this leave." });
+      if (r.status === "approved" && r.from < this.today) return this.json(409, { error: "This leave has already started, so it can't be cancelled." });
+      if (r.status !== "approved") return this.json(409, { error: "That request is already closed." });
+      r.cancelRequested = true;
+      r.cancelRequestedOn = this.today;
+      return this.json(200, { ok: true, action: "request" });
+    }
+    if (method === "POST" && path === "/api/employee/comp-off") {
+      const errors: Record<string, string> = {};
+      const day = new Date(body.workedOn + "T00:00:00");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.workedOn)) errors.workedOn = "Pick the day you worked.";
+      else if (body.workedOn > this.today) errors.workedOn = "That day hasn't happened yet.";
+      else if (![0, 6].includes(day.getDay())) errors.workedOn = "That was a working day, so it doesn't earn comp-off. Pick a weekend or a national holiday.";
+      else if (this.requests.some((r) => r.employeeId === me.id && r.type === "Comp-off" && r.status !== "rejected" && r.from === body.workedOn)) errors.workedOn = "You've already claimed comp-off for that day.";
+      if (!["full", "half"].includes(body.dayLength)) errors.dayLength = "Choose a full or half day.";
+      if (Object.keys(errors).length) return this.json(422, { errors, values: { workedOn: body.workedOn } });
+      const half = body.dayLength === "half";
+      this.requests.push({ id: `c${this.requests.length + 1}`, employeeId: me.id, type: "Comp-off", status: "pending", from: body.workedOn, to: body.workedOn, appliedOn: this.today, halfDay: half, days: half ? 0.5 : 1, expiresOn: "2027-01-05" });
+      return this.json(201, { submitted: { workedOn: body.workedOn, halfDay: half } });
+    }
+    if (method === "GET" && path === "/api/employee/permissions") return this.json(200, { permissions: this.permissions.filter((p) => p.employeeId === me.id) });
+    if (method === "POST" && path === "/api/employee/permissions") {
+      const errors: Record<string, string> = {};
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.date)) errors.date = "Pick the day.";
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.from)) errors.from = "Pick a start time.";
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.to)) errors.to = "Pick an end time.";
+      if (!errors.from && !errors.to && body.to <= body.from) errors.to = "The end time has to be after the start time.";
+      if (body.reason.length > 200) errors.reason = "Keep it under 200 characters.";
+      if (!errors.date && !errors.from && !errors.to && this.permissions.some((p) => p.employeeId === me.id && p.date === body.date && p.from < body.to && p.to > body.from)) {
+        errors.form = "You already have a permission that overlaps this time.";
+      }
+      if (Object.keys(errors).length) return this.json(422, { errors, values: { date: body.date, from: body.from, to: body.to, reason: body.reason } });
+      const minutes = Number(body.to.slice(0, 2)) * 60 + Number(body.to.slice(3)) - (Number(body.from.slice(0, 2)) * 60 + Number(body.from.slice(3)));
+      this.permissions.push({ id: `p${this.permissions.length + 1}`, employeeId: me.id, date: body.date, from: body.from, to: body.to, minutes, reason: body.reason.trim() });
+      return this.json(201, { logged: { date: body.date, from: body.from, to: body.to } });
+    }
+
+    if (me.role !== "admin") return null;
+    if (method === "GET" && path === "/api/admin/dashboard") {
+      const pending = this.requests.filter((r) => r.status === "pending" || (r.status === "approved" && r.cancelRequested));
+      return this.json(200, { ...this.adminDashboard, pending: pending.map((r) => this.requestView(r)), holidays: this.holidayList() });
+    }
+    if (method === "GET" && path === "/api/admin/leave") return this.json(200, { requests: this.newestFirst(this.requests.filter((r) => r.type !== "Comp-off")).map((r) => this.requestView(r)) });
+    if (method === "GET" && path === "/api/admin/comp-off") return this.json(200, { requests: this.newestFirst(this.requests.filter((r) => r.type === "Comp-off")).map((r) => this.requestView(r)) });
+    if (method === "GET" && path === "/api/admin/permissions") {
+      return this.json(200, { permissions: [...this.permissions].sort((a, b) => b.date.localeCompare(a.date)).map((p) => ({ ...p, employeeName: this.nameOf(p.employeeId) })) });
+    }
+    const decision = path.match(/^\/api\/admin\/requests\/(.+)\/decision$/);
+    if (method === "POST" && decision) {
+      if (!["approved", "rejected"].includes(body.decision)) return this.json(422, { error: "Choose approve or reject." });
+      const r = this.requests.find((x) => x.id === decision[1]);
+      if (!r || !(r.status === "pending" || (r.status === "approved" && r.cancelRequested))) return this.json(409, { error: "That request is no longer waiting for a decision." });
+      if (r.cancelRequested) {
+        r.status = body.decision === "approved" ? "cancelled" : "approved";
+        r.cancelRequested = false;
+        r.cancelRequestedOn = null;
+      } else r.status = body.decision as FakeRequest["status"];
+      return this.json(200, { ok: true });
+    }
+    if (method === "GET" && path === "/api/admin/leave-policy") {
+      return this.json(200, { categories: Object.entries(this.policy).map(([category, daysPerYear]) => ({ category, daysPerYear, employees: this.users.filter((u) => u.category === category).length })) });
+    }
+    if (method === "PUT" && path === "/api/admin/leave-policy") {
+      const errors: Record<string, string> = {};
+      const days: Record<string, number> = {};
+      for (const c of Object.keys(this.policy)) {
+        const raw = String(body[c] ?? "").trim();
+        const n = Number(raw);
+        if (raw === "" || !Number.isInteger(n)) errors[c] = "Enter a whole number of days.";
+        else if (n < 0 || n > 366) errors[c] = "Use a number between 0 and 366.";
+        else days[c] = n;
+      }
+      if (Object.keys(errors).length) return this.json(422, { errors, values: body });
+      Object.assign(this.policy, days);
+      return this.json(200, { saved: true });
+    }
+    return null;
   }
 
   private employee(id: string) {

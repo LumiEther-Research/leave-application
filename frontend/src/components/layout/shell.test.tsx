@@ -43,19 +43,16 @@ describe("the admin shell", () => {
     expect(sections.map((s) => s.textContent)).toEqual(["Overview", "Leave", "Company", "Payroll", "Account"]);
   });
 
-  it("makes ready items links, marks the current one, and shows Soon on the ones the current app has not built", async () => {
+  it("makes every item a link and marks the current one (Leave requests, Comp-off and Holidays are built now, so nothing says Soon)", async () => {
     await renderApp("/admin/admins");
     const n = within(nav());
     expect(n.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/admin");
     expect(n.getByRole("link", { name: "Admins" }).getAttribute("aria-current")).toBe("page");
     expect(n.getByRole("link", { name: "Employees" }).getAttribute("aria-current")).toBeNull();
-    for (const label of ["Leave requests", "Comp-off", "Holidays"]) {
-      expect(n.queryByRole("link", { name: new RegExp(label) })).toBeNull(); // not a link
-      const item = n.getByText(label).closest("span[aria-disabled]");
-      expect(item?.getAttribute("aria-disabled")).toBe("true");
-      expect(within(item as HTMLElement).getByText("Soon")).toBeTruthy();
+    for (const [label, href] of [["Leave requests", "/admin/leave"], ["Comp-off", "/admin/comp-off"], ["Holidays", "/admin/holidays"]]) {
+      expect(n.getByRole("link", { name: new RegExp(label) }).getAttribute("href")).toBe(href);
     }
-    expect(n.getAllByText("Soon")).toHaveLength(3);
+    expect(n.queryByText("Soon")).toBeNull();
   });
 
   it("changes the title and the highlighted item when you pick another page, without a reload", async () => {
@@ -68,8 +65,8 @@ describe("the admin shell", () => {
   });
 
   it("says which phase brings a screen that is not built yet", async () => {
-    await renderApp("/admin/holidays");
-    expect(screen.getByText(/has not been rebuilt yet. It arrives in Phase 2/)).toBeTruthy();
+    await renderApp("/admin/payslips");
+    expect(screen.getByText(/has not been rebuilt yet. It arrives in Phase 4/)).toBeTruthy();
   });
 });
 
@@ -154,7 +151,7 @@ describe("log out and the mobile drawer", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("link", { name: "Leave policy" })).toBeTruthy();
-    expect(within(dialog).getAllByText("Soon")).toHaveLength(3);
+    expect(within(dialog).queryByText("Soon")).toBeNull();
 
     await userEvent.click(within(dialog).getByRole("link", { name: "Admins" }));
     await act(async () => {});

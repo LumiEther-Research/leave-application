@@ -8,7 +8,16 @@ import { currentUser, homeFor, send, type Role, type SessionUser } from "@/lib/a
 import { initialsOf } from "@/lib/initials";
 import { AdminsPage, adminsLoader } from "@/pages/admins";
 import { ChangePasswordPage } from "@/pages/change-password";
+import { AdminDashboardPage, adminDashboardLoader } from "@/pages/admin-dashboard";
+import { EmployeeDashboardPage, employeeDashboardLoader } from "@/pages/employee-dashboard";
 import { EmployeesPage, employeesLoader } from "@/pages/employees";
+import { HolidaysPage, holidaysLoader } from "@/pages/holidays";
+import { LeavePolicyPage, leavePolicyLoader } from "@/pages/leave-policy";
+import { AdminPermissionsPage, MyPermissionsPage, adminPermissionsLoader, myPermissionsLoader } from "@/pages/permissions";
+import {
+  AdminCompOffPage, AdminLeavePage, MyCompOffPage, MyLeavePage,
+  adminCompOffLoader, adminLeaveLoader, myCompOffLoader, myLeaveLoader,
+} from "@/pages/requests";
 import { LoginPage } from "@/pages/login";
 
 /** Which phase of docs/rebuild-plan.md brings each screen. */
@@ -76,7 +85,18 @@ function Shell() {
 /** The pages that are built. Everything else in the nav is still a placeholder. */
 const built: Record<string, Pick<RouteObject, "element" | "loader">> = {
   "/admin/admins": { element: <AdminsPage />, loader: adminsLoader },
+  "/admin": { element: <AdminDashboardPage />, loader: adminDashboardLoader },
+  "/admin/leave": { element: <AdminLeavePage />, loader: adminLeaveLoader },
+  "/admin/comp-off": { element: <AdminCompOffPage />, loader: adminCompOffLoader },
+  "/admin/permissions": { element: <AdminPermissionsPage />, loader: adminPermissionsLoader },
   "/admin/employees": { element: <EmployeesPage />, loader: employeesLoader },
+  "/admin/leave-policy": { element: <LeavePolicyPage />, loader: leavePolicyLoader },
+  "/admin/holidays": { element: <HolidaysPage />, loader: holidaysLoader("/employee") },
+  "/employee": { element: <EmployeeDashboardPage />, loader: employeeDashboardLoader },
+  "/employee/leave": { element: <MyLeavePage />, loader: myLeaveLoader },
+  "/employee/comp-off": { element: <MyCompOffPage />, loader: myCompOffLoader },
+  "/employee/permissions": { element: <MyPermissionsPage />, loader: myPermissionsLoader },
+  "/employee/holidays": { element: <HolidaysPage />, loader: holidaysLoader("/admin") },
   "/admin/password": { element: <ChangePasswordPage /> },
   "/employee/password": { element: <ChangePasswordPage /> },
 };

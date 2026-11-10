@@ -24,9 +24,9 @@ describe("nav config (identical to the current app's)", () => {
     ]);
   });
 
-  it("marks exactly the items the current app has not built as not ready", () => {
+  it("has no item left marked as not built: Leave requests, Comp-off and Holidays (\"Soon\" in the current app) are built here", () => {
     const notReady = navByRole.admin.flatMap((s) => s.items).filter((i) => !i.ready).map((i) => i.label);
-    expect(notReady).toEqual(["Leave requests", "Comp-off", "Holidays"]);
+    expect(notReady).toEqual([]);
     expect(navByRole.employee.flatMap((s) => s.items).every((i) => i.ready)).toBe(true);
   });
 

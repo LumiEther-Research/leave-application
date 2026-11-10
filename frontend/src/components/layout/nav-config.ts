@@ -33,8 +33,8 @@ export const navByRole: Record<Role, NavSection[]> = {
     {
       label: "Leave",
       items: [
-        { label: "Leave requests", href: "/admin/leave", icon: CalendarDays, ready: false },
-        { label: "Comp-off", href: "/admin/comp-off", icon: CalendarClock, ready: false },
+        { label: "Leave requests", href: "/admin/leave", icon: CalendarDays, ready: true },
+        { label: "Comp-off", href: "/admin/comp-off", icon: CalendarClock, ready: true },
         { label: "Permissions", href: "/admin/permissions", icon: Clock, ready: true },
       ],
     },
@@ -44,7 +44,7 @@ export const navByRole: Record<Role, NavSection[]> = {
         { label: "Employees", href: "/admin/employees", icon: Users, ready: true },
         { label: "Admins", href: "/admin/admins", icon: ShieldCheck, ready: true },
         { label: "Leave policy", href: "/admin/leave-policy", icon: SlidersHorizontal, ready: true },
-        { label: "Holidays", href: "/admin/holidays", icon: Flag, ready: false },
+        { label: "Holidays", href: "/admin/holidays", icon: Flag, ready: true },
       ],
     },
     {

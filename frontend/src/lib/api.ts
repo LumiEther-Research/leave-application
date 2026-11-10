@@ -1,3 +1,4 @@
+import { redirect } from "react-router-dom";
 /**
  * The only place the frontend talks to the backend. The session is the lr_session HttpOnly cookie: the browser sends it
  * because of `credentials: "include"`, and no script ever sees it, so nothing here reads or stores a token.
@@ -66,3 +67,84 @@ export type EmployeeRow = {
   /** plain "16500.00", or null when not set */
   monthlySalary: string | null;
 };
+
+export type RequestStatus = "pending" | "approved" | "rejected" | "cancelled";
+
+/** A leave request or comp-off claim as the backend shows it, with what it takes or earns and what may still be done. */
+export type RequestRow = {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  type: "Casual leave" | "Sick leave" | "Comp-off";
+  status: RequestStatus;
+  from: string;
+  to: string;
+  appliedOn: string;
+  halfDay: boolean;
+  cancelRequested: boolean;
+  cancelRequestedOn: string | null;
+  /** working days a leave request takes, or days a comp-off claim earns */
+  days: number;
+  /** comp-off only: the last day it can be used is the day before */
+  expiresOn?: string;
+  /** what cancelling does right now, or null when it can't be cancelled */
+  cancel: "withdraw" | "request" | null;
+};
+
+export type PermissionRow = {
+  id: string;
+  employeeId: string;
+  employeeName?: string;
+  date: string;
+  from: string;
+  to: string;
+  minutes: number;
+  reason: string;
+};
+
+export type Holiday = { name: string; date: string; daysAway: number };
+
+export type EmployeeDashboard = {
+  year: number;
+  applied: { approved: number; pending: number; total: number };
+  compOff: { available: number; waiting: number };
+  holidays: Holiday[];
+};
+
+export type BalanceRow = {
+  employeeId: string;
+  name: string;
+  category: string;
+  total: number;
+  casual: number;
+  sick: number;
+  used: number;
+  remaining: number;
+  compOffAvailable: number;
+  compOffExpired: number;
+};
+
+export type AdminDashboard = {
+  year: number;
+  today: string;
+  hour: number;
+  teamSize: number;
+  pending: RequestRow[];
+  outTodayCount: number;
+  outThisWeek: RequestRow[];
+  monthly: { month: string; approved: number; pending: number }[];
+  pendingLeaveCount: number;
+  holidays: Holiday[];
+  balances: BalanceRow[];
+};
+
+export type PolicyRow = { category: string; daysPerYear: number; employees: number };
+
+/** GET a JSON screen's data. 401 goes to /login, 403 (wrong role) to `home`; anything else unexpected is thrown for the error page. */
+export async function load<T>(path: string, home: string): Promise<T> {
+  const reply = await send("GET", path);
+  if (reply.status === 401) throw redirect("/login");
+  if (reply.status === 403) throw redirect(home);
+  if (reply.status !== 200 || !reply.body) throw new ApiError(reply.status, reply.body);
+  return reply.body as T;
+}
