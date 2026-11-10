@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -58,15 +58,18 @@ describe("the admin shell", () => {
   it("changes the title and the highlighted item when you pick another page, without a reload", async () => {
     await renderApp("/admin");
     await userEvent.click(within(nav()).getByRole("link", { name: "Payslips" }));
-    expect(screen.getByRole("heading", { level: 1, name: "Payslips" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Payslips" })).toBeTruthy();
     expect(within(nav()).getByRole("link", { name: "Payslips" }).getAttribute("aria-current")).toBe("page");
     expect(within(nav()).getByRole("link", { name: "Dashboard" }).getAttribute("aria-current")).toBeNull();
-    expect(screen.getByText(/arrives in Phase 4/)).toBeTruthy();
+    expect(await screen.findByText("Generate a payslip")).toBeTruthy(); // the real Payslips screen
   });
 
-  it("says which phase brings a screen that is not built yet", async () => {
-    await renderApp("/admin/payslips");
-    expect(screen.getByText(/has not been rebuilt yet. It arrives in Phase 4/)).toBeTruthy();
+  it("every sidebar item is built now, so none shows the placeholder", async () => {
+    for (const path of ["/admin/payslips", "/admin/holidays", "/admin/leave", "/admin/comp-off", "/admin/leave-policy"]) {
+      await renderApp(path);
+      expect(screen.queryByText(/has not been rebuilt yet/)).toBeNull();
+      cleanup();
+    }
   });
 });
 

@@ -37,6 +37,10 @@ export type FakeRequest = {
   expiresOn?: string;
 };
 
+export type FakePayslip = {
+  id: string; employeeId: string; periodMonth: string; basic: number; deduction: number; net: number; generatedOn: string; published: boolean;
+};
+
 export type FakePermission = { id: string; employeeId: string; date: string; from: string; to: string; minutes: number; reason: string };
 
 export class FakeBackend {
@@ -79,6 +83,9 @@ export class FakeBackend {
   };
   /** Make the next valid employee save fail with a server error. */
   failNextAdd = false;
+  payslips: FakePayslip[] = [];
+  /** Simulates the PDF service being down for the next generate. */
+  pdfDown = false;
   /** Make the next leave request fail the balance check. */
   overdrawn = false;
   /** Hold every reply until release() is called, to look at the page while a request is running. */
@@ -194,6 +201,8 @@ export class FakeBackend {
       this.users = this.users.filter((u) => u.id !== delEmployee[1]);
       return this.json(200, { ok: true });
     }
+    const payslipReply = this.payslipRoutes(method, path, body, me);
+    if (payslipReply) return payslipReply;
     const leaveReply = this.leaveRoutes(method, path, body, me);
     if (leaveReply) return leaveReply;
     const del = path.match(/^\/api\/admin\/admins\/(.+)$/);
@@ -233,6 +242,55 @@ export class FakeBackend {
 
   private newestFirst(list: FakeRequest[]) {
     return [...list].sort((a, b) => b.appliedOn.localeCompare(a.appliedOn) || b.from.localeCompare(a.from));
+  }
+
+  private payslipRow(p: FakePayslip) {
+    const e = this.users.find((u) => u.id === p.employeeId);
+    return { ...p, employeeName: e?.name ?? "Unknown", employeeCode: `HR-EMP-${String(this.users.indexOf(e!) + 1).padStart(5, "0")}` };
+  }
+
+  /** The payslip routes, with the backend's status codes and messages. */
+  private payslipRoutes(method: string, path: string, body: Record<string, unknown>, me: FakeUser): Response | null {
+    if (method === "GET" && path === "/api/employee/payslips" && me.role === "employee") {
+      return this.json(200, { payslips: this.payslips.filter((p) => p.employeeId === me.id && p.published).sort((a, b) => b.periodMonth.localeCompare(a.periodMonth)).map((p) => this.payslipRow(p)) });
+    }
+    if (me.role !== "admin") return null;
+    const list = path.match(/^\/api\/admin\/payslips(?:\?month=(.*))?$/);
+    if (method === "GET" && list) {
+      const asked = decodeURIComponent(list[1] ?? "");
+      const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(asked) ? asked : this.today.slice(0, 7);
+      const employees = this.users.filter((u) => u.role === "employee").map((u) => ({ id: u.id, name: u.name, employeeCode: this.payslipRow({ employeeId: u.id } as FakePayslip).employeeCode, designation: u.designation ?? null, monthlySalary: u.monthlySalary ?? null }));
+      return this.json(200, { month, employees, payslips: this.payslips.filter((p) => p.periodMonth === `${month}-01`).map((p) => this.payslipRow(p)) });
+    }
+    if (method === "POST" && path === "/api/admin/payslips") {
+      const b = body as Record<string, string> & { replace?: boolean };
+      const errors: Record<string, string> = {};
+      const employee = this.users.find((u) => u.id === b.employeeId && u.role === "employee");
+      if (!employee) errors.employee = "Choose an employee.";
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(b.month) || b.month < "2000-01") errors.month = "Choose a month.";
+      const basic = Number(String(b.basic).replace(/,/g, ""));
+      const deduction = String(b.deduction).trim() === "" ? 0 : Number(b.deduction);
+      if (!(basic > 0)) errors.basic = "Enter the basic as an amount, like 16500 or 16500.50.";
+      else if (deduction < 0) errors.deduction = "Deduction can't be negative.";
+      else if (deduction > basic) errors.deduction = `Deduction can't be more than the basic of ₹${basic.toFixed(2)}.`;
+      if (Object.keys(errors).length || !employee) return this.json(422, { errors });
+      const existing = this.payslips.find((p) => p.employeeId === employee.id && p.periodMonth === `${b.month}-01`);
+      if (existing?.published && !b.replace) return this.json(409, { confirm: { employeeName: employee.name, month: b.month } });
+      if (this.pdfDown) return this.json(503, { pdfError: "PDF service is not running" });
+      const row: FakePayslip = { id: existing?.id ?? `s${this.payslips.length + 1}`, employeeId: employee.id, periodMonth: `${b.month}-01`, basic: Math.round(basic * 100), deduction: Math.round(deduction * 100), net: Math.round((basic - deduction) * 100), generatedOn: this.today, published: true };
+      this.payslips = this.payslips.filter((p) => p !== existing).concat(row);
+      const verb = existing ? "replaced" : "generated";
+      const label = new Date(`${b.month}-01T00:00:00`).toLocaleString("en", { month: "long", year: "numeric" });
+      return this.json(201, { done: { outcome: existing ? "replaced" : "saved", message: `Payslip ${verb} for ${employee.name}, ${label}` } });
+    }
+    const publish = path.match(/^\/api\/admin\/payslips\/(.+)\/publish$/);
+    if (method === "POST" && publish) {
+      const p = this.payslips.find((x) => x.id === publish[1]);
+      if (!p || p.published) return this.json(409, { error: "That payslip is already published or no longer exists." });
+      p.published = true;
+      return this.json(200, { ok: true });
+    }
+    return null;
   }
 
   /** The leave, comp-off, permission, holiday and policy routes, with the backend's status codes and messages. */

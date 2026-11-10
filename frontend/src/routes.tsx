@@ -13,6 +13,7 @@ import { EmployeeDashboardPage, employeeDashboardLoader } from "@/pages/employee
 import { EmployeesPage, employeesLoader } from "@/pages/employees";
 import { HolidaysPage, holidaysLoader } from "@/pages/holidays";
 import { LeavePolicyPage, leavePolicyLoader } from "@/pages/leave-policy";
+import { AdminPayslipsPage, MyPayslipsPage, adminPayslipsLoader, myPayslipsLoader } from "@/pages/payslips";
 import { AdminPermissionsPage, MyPermissionsPage, adminPermissionsLoader, myPermissionsLoader } from "@/pages/permissions";
 import {
   AdminCompOffPage, AdminLeavePage, MyCompOffPage, MyLeavePage,
@@ -89,6 +90,8 @@ const built: Record<string, Pick<RouteObject, "element" | "loader">> = {
   "/admin/leave": { element: <AdminLeavePage />, loader: adminLeaveLoader },
   "/admin/comp-off": { element: <AdminCompOffPage />, loader: adminCompOffLoader },
   "/admin/permissions": { element: <AdminPermissionsPage />, loader: adminPermissionsLoader },
+  "/admin/payslips": { element: <AdminPayslipsPage />, loader: adminPayslipsLoader },
+  "/employee/payslips": { element: <MyPayslipsPage />, loader: myPayslipsLoader },
   "/admin/employees": { element: <EmployeesPage />, loader: employeesLoader },
   "/admin/leave-policy": { element: <LeavePolicyPage />, loader: leavePolicyLoader },
   "/admin/holidays": { element: <HolidaysPage />, loader: holidaysLoader("/employee") },

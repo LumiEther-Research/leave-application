@@ -148,3 +148,22 @@ export async function load<T>(path: string, home: string): Promise<T> {
   if (reply.status !== 200 || !reply.body) throw new ApiError(reply.status, reply.body);
   return reply.body as T;
 }
+
+/** A payslip as the lists show it. Money is in paise; `generatedOn` is the IST day it was made. */
+export type PayslipRow = {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  /** "2026-08-01" */
+  periodMonth: string;
+  basic: number;
+  deduction: number;
+  net: number;
+  generatedOn: string;
+  /** false for a draft the monthly job made: only the admin sees it until it is published */
+  published: boolean;
+};
+
+export type PayslipEmployee = { id: string; name: string; employeeCode: string; designation: string | null; monthlySalary: string | null };
+export type AdminPayslips = { month: string; employees: PayslipEmployee[]; payslips: PayslipRow[] };
