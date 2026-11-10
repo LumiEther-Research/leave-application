@@ -6,7 +6,11 @@ import app.lumiether.auth.Password;
 import app.lumiether.auth.Sessions;
 import app.lumiether.auth.Token.Role;
 import app.lumiether.db.Db;
+import app.lumiether.db.LeaveStore;
 import app.lumiether.db.Store;
+import app.lumiether.domain.Dates;
+import app.lumiether.domain.Leave;
+import app.lumiether.domain.Requests;
 import app.lumiether.domain.Employees;
 import app.lumiether.domain.Types;
 import app.lumiether.domain.Types.Admin;
@@ -19,9 +23,13 @@ import io.helidon.webserver.http.HttpRoute;
 import io.helidon.webserver.http.HttpRouting;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * The REST API under /api. Every route does what the matching Next.js page or server action did: check the session
@@ -37,6 +45,8 @@ public final class Api {
   private final Auth auth;
   private final Sessions sessions;
   private final ChangePassword changePassword;
+  private final LeaveStore leave;
+  private final Supplier<LocalDate> today;
 
   private final Settings settings;
 
@@ -48,6 +58,13 @@ public final class Api {
   public record Settings(boolean cookieSecure, List<String> allowedOrigins) {}
 
   public Api(Store store, Auth auth, Sessions sessions, Settings settings) {
+    this(store, auth, sessions, settings, Dates::today);
+  }
+
+  /** {@code today} is the team's calendar day (IST); tests pass a fixed one. */
+  public Api(Store store, Auth auth, Sessions sessions, Settings settings, Supplier<LocalDate> today) {
+    this.leave = new LeaveStore(store);
+    this.today = today;
     this.settings = settings;
     this.store = store;
     this.auth = auth;
@@ -99,6 +116,24 @@ public final class Api {
     routing.patch("/api/admin/employees/{id}/category", authed(Role.admin, this::changeCategory));
     routing.patch("/api/admin/employees/{id}/payroll", authed(Role.admin, this::updatePayroll));
     routing.delete("/api/admin/employees/{id}", authed(Role.admin, this::removeEmployee));
+
+    routing.get("/api/holidays", authed(null, this::holidays));
+    routing.get("/api/employee/dashboard", authed(Role.employee, this::employeeDashboard));
+    routing.get("/api/employee/leave", authed(Role.employee, (req, res, user) -> myRequests(res, user, false)));
+    routing.post("/api/employee/leave", authed(Role.employee, this::applyLeave));
+    routing.post("/api/employee/leave/{id}/cancel", authed(Role.employee, this::cancelLeave));
+    routing.get("/api/employee/comp-off", authed(Role.employee, (req, res, user) -> myRequests(res, user, true)));
+    routing.post("/api/employee/comp-off", authed(Role.employee, this::claimCompOff));
+    routing.get("/api/employee/permissions", authed(Role.employee, this::myPermissions));
+    routing.post("/api/employee/permissions", authed(Role.employee, this::logPermission));
+
+    routing.get("/api/admin/dashboard", authed(Role.admin, this::adminDashboard));
+    routing.post("/api/admin/requests/{id}/decision", authed(Role.admin, this::decide));
+    routing.get("/api/admin/leave", authed(Role.admin, (req, res, user) -> allRequests(res, false)));
+    routing.get("/api/admin/comp-off", authed(Role.admin, (req, res, user) -> allRequests(res, true)));
+    routing.get("/api/admin/permissions", authed(Role.admin, this::allPermissions));
+    routing.get("/api/admin/leave-policy", authed(Role.admin, this::getLeavePolicy));
+    routing.put("/api/admin/leave-policy", authed(Role.admin, this::saveLeavePolicy));
   }
 
   // ---------------------------------------------------------------- plumbing
@@ -324,5 +359,227 @@ public final class Api {
   private void removeEmployee(ServerRequest req, ServerResponse res, SessionUser user) {
     if (store.deleteEmployee(req.path().pathParameters().get("id"))) json(res, 200, Map.of("ok", true));
     else error(res, 404, "That employee no longer exists.");
+  }
+
+  // ------------------------------------------------------- leave and comp-off
+
+  private static Map<String, Object> map(Object... kv) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    for (int i = 0; i < kv.length; i += 2) m.put((String) kv[i], kv[i + 1]);
+    return m;
+  }
+
+  /** One request for display: the days it takes or earns, and what the employee may still do with it. */
+  private Map<String, Object> requestView(Leave.Request r, List<Types.Holiday> holidays, Types.Employee employee, LocalDate now) {
+    boolean comp = r.type().equals("Comp-off");
+    Map<String, Object> m = map("id", r.id(), "employeeId", r.employeeId(), "employeeName", employee == null ? "Unknown" : employee.name(),
+        "type", r.type(), "status", r.status(), "from", r.from(), "to", r.to(), "appliedOn", r.appliedOn(), "halfDay", r.halfDay(),
+        "cancelRequested", r.cancelRequested(), "cancelRequestedOn", r.cancelRequestedOn(),
+        "days", comp ? Leave.compOffDaysFor(r.from(), r.halfDay(), holidays) : Leave.leaveDays(r, holidays));
+    if (comp && employee != null) m.put("expiresOn", Leave.compOffExpiry(employee.joiningDate(), r.from()));
+    var plan = comp ? null : Requests.planCancellation(r, now);
+    m.put("cancel", plan != null && plan.ok() ? plan.action() : null);
+    return m;
+  }
+
+  private static Map<String, Object> holidayView(Types.Holiday h, LocalDate now) {
+    LocalDate date = LocalDate.of(now.getYear(), h.month(), h.day());
+    if (date.isBefore(now)) date = date.plusYears(1);
+    return map("name", h.name(), "date", date.toString(), "daysAway", java.time.temporal.ChronoUnit.DAYS.between(now, date));
+  }
+
+  /** Next occurrence of each yearly holiday on or after today, soonest first. */
+  private List<Map<String, Object>> upcomingHolidays(LocalDate now) {
+    return store.getHolidays().stream().map(h -> holidayView(h, now)).sorted(Comparator.comparingLong(h -> (Long) h.get("daysAway"))).toList();
+  }
+
+  private void holidays(ServerRequest req, ServerResponse res, SessionUser user) {
+    json(res, 200, Map.of("holidays", upcomingHolidays(today.get())));
+  }
+
+  private Types.Employee employeeOf(String id) {
+    return store.getEmployees().stream().filter(e -> e.id().equals(id)).findFirst().orElse(null);
+  }
+
+  /** The employee's own requests, newest first. Leave and comp-off are separate screens, so {@code comp} picks one. */
+  private void myRequests(ServerResponse res, SessionUser user, boolean comp) {
+    LocalDate now = today.get();
+    Types.Employee me = employeeOf(user.id());
+    var holidays = store.getHolidays();
+    List<Map<String, Object>> rows = leave.getRequests(user.id()).stream()
+        .filter(r -> r.type().equals("Comp-off") == comp)
+        .sorted(Comparator.comparing(Leave.Request::appliedOn).thenComparing(Leave.Request::from).reversed())
+        .map(r -> requestView(r, holidays, me, now)).toList();
+    json(res, 200, Map.of("requests", rows));
+  }
+
+  private void respondSubmit(ServerResponse res, LeaveStore.Submit result, Map<String, String> values, Map<String, Object> submitted) {
+    if (result.ok()) json(res, 201, Map.of("submitted", submitted));
+    else json(res, 422, Map.of("errors", result.errors(), "values", values));
+  }
+
+  /** Employees only, and always for themselves: the employee id comes from the session, never the body. */
+  private void applyLeave(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    String dayLength = Json.text(body, "dayLength").isEmpty() ? "full" : Json.text(body, "dayLength");
+    Requests.LeaveInput input = new Requests.LeaveInput(Json.text(body, "type"), Json.text(body, "from"), Json.text(body, "to"), dayLength);
+    var result = leave.addLeaveRequest(user.id(), input, today.get());
+    boolean half = dayLength.equals("half");
+    respondSubmit(res, result, Map.of("from", input.from(), "to", input.to()),
+        map("type", input.type(), "from", input.from(), "to", half ? input.from() : input.to(), "halfDay", half));
+  }
+
+  private void claimCompOff(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    Requests.CompOffInput input = new Requests.CompOffInput(Json.text(body, "workedOn"), Json.text(body, "dayLength"));
+    var result = leave.addCompOffClaim(user.id(), input, today.get());
+    respondSubmit(res, result, Map.of("workedOn", input.workedOn()), map("workedOn", input.workedOn(), "halfDay", input.dayLength().equals("half")));
+  }
+
+  /** Employees only, and only their own leave. Pending leave is withdrawn; approved leave goes to an admin. */
+  private void cancelLeave(ServerRequest req, ServerResponse res, SessionUser user) {
+    var result = leave.cancelLeaveRequest(user.id(), req.path().pathParameters().get("id"), today.get());
+    if (result.ok()) json(res, 200, Map.of("ok", true, "action", result.action()));
+    else error(res, 409, result.error());
+  }
+
+  private void myPermissions(ServerRequest req, ServerResponse res, SessionUser user) {
+    json(res, 200, Map.of("permissions", leave.getPermissions(user.id()).stream().map(p -> p.permission()).toList()));
+  }
+
+  /** Employees only, for themselves. Notes a few hours off on one working day; nothing is deducted from leave. */
+  private void logPermission(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    Requests.PermissionInput input = new Requests.PermissionInput(Json.text(body, "date"), Json.text(body, "from"), Json.text(body, "to"), Json.text(body, "reason"));
+    var result = leave.addPermission(user.id(), input, today.get());
+    Map<String, String> values = Map.of("date", input.date(), "from", input.from(), "to", input.to(), "reason", input.reason());
+    if (result.ok()) json(res, 201, Map.of("logged", map("date", input.date(), "from", input.from(), "to", input.to())));
+    else json(res, 422, Map.of("errors", result.errors(), "values", values));
+  }
+
+  /**
+   * What an employee sees is deliberately short: the days of leave they've applied for, their comp-off, and the holidays.
+   * Their yearly allowance and remaining days are never sent to them.
+   */
+  private void employeeDashboard(ServerRequest req, ServerResponse res, SessionUser user) {
+    LocalDate now = today.get();
+    int year = now.getYear();
+    Types.Employee me = employeeOf(user.id());
+    if (me == null) {
+      error(res, 401, "You are signed out. Sign in again.");
+      return;
+    }
+    var holidays = store.getHolidays();
+    var mine = leave.getRequests(me.id());
+    var applied = Leave.appliedLeaveDays(mine, holidays, year);
+    var entries = Leave.getLeaveEntries(mine, Map.of(), holidays, year);
+    var balance = Leave.getLeaveBalances(List.of(me), entries, mine, holidays, year, now).get(0);
+    double waiting = mine.stream().filter(r -> r.type().equals("Comp-off") && r.status().equals("pending"))
+        .mapToDouble(r -> Leave.compOffDaysFor(r.from(), r.halfDay(), holidays)).sum();
+    json(res, 200, map("year", year, "applied", applied, "compOff", map("available", balance.compOffAvailable(), "waiting", waiting),
+        "holidays", upcomingHolidays(now)));
+  }
+
+  // -------------------------------------------------------------- admin side
+
+  private void adminDashboard(ServerRequest req, ServerResponse res, SessionUser user) {
+    LocalDate now = today.get();
+    int year = now.getYear();
+    var employees = store.getEmployees();
+    var holidays = store.getHolidays();
+    var requests = leave.getRequests(null);
+    var byId = new LinkedHashMap<String, Types.Employee>();
+    employees.forEach(e -> byId.put(e.id(), e));
+
+    var pending = Leave.getAwaitingDecision(requests);
+    var outToday = Leave.getOutOn(requests, now);
+    var entries = Leave.getLeaveEntries(requests, Map.of(), holidays, year);
+    List<Map<String, Object>> balances = new ArrayList<>();
+    for (var b : Leave.getLeaveBalances(employees, entries, requests, holidays, year, now)) {
+      balances.add(map("employeeId", b.employee().id(), "name", b.employee().name(), "category", b.employee().category(), "total", b.total(),
+          "casual", b.casual(), "sick", b.sick(), "used", b.used(), "remaining", b.remaining(),
+          "compOffAvailable", b.compOffAvailable(), "compOffExpired", b.compOffExpired()));
+    }
+    json(res, 200, map(
+        "year", year, "today", now.toString(), "hour", java.time.ZonedDateTime.now(Dates.APP_TIME_ZONE).getHour(),
+        "teamSize", employees.size(),
+        "pending", pending.stream().map(r -> requestView(r, holidays, byId.get(r.employeeId()), now)).toList(),
+        "outTodayCount", outToday.size(),
+        "outThisWeek", Leave.getOutThisWeek(requests, now).stream().map(r -> requestView(r, holidays, byId.get(r.employeeId()), now)).toList(),
+        "monthly", Leave.getMonthlyLeave(entries),
+        "pendingLeaveCount", Leave.getPending(requests).stream().filter(Leave::drawsOnBalance).count(),
+        "holidays", upcomingHolidays(now),
+        "balances", balances));
+  }
+
+  /** Admin only. Approve or reject what is waiting: a pending request, or a cancellation request on approved leave. */
+  private void decide(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    String decision = Json.text(body, "decision");
+    if (!decision.equals("approved") && !decision.equals("rejected")) {
+      error(res, 422, "Choose approve or reject.");
+    } else if (!leave.resolveRequest(req.path().pathParameters().get("id"), decision)) {
+      error(res, 409, "That request is no longer waiting for a decision.");
+    } else {
+      json(res, 200, Map.of("ok", true));
+    }
+  }
+
+  /** Every employee's leave requests, or comp-off claims, newest first. Admin only. */
+  private void allRequests(ServerResponse res, boolean comp) {
+    LocalDate now = today.get();
+    var holidays = store.getHolidays();
+    var byId = new LinkedHashMap<String, Types.Employee>();
+    store.getEmployees().forEach(e -> byId.put(e.id(), e));
+    var rows = leave.getRequests(null).stream()
+        .filter(r -> r.type().equals("Comp-off") == comp)
+        .sorted(Comparator.comparing(Leave.Request::appliedOn).thenComparing(Leave.Request::from).reversed())
+        .map(r -> requestView(r, holidays, byId.get(r.employeeId()), now)).toList();
+    json(res, 200, Map.of("requests", rows));
+  }
+
+  private void allPermissions(ServerRequest req, ServerResponse res, SessionUser user) {
+    json(res, 200, Map.of("permissions", leave.getPermissions(null).stream()
+        .map(p -> map("id", p.permission().id(), "employeeId", p.permission().employeeId(), "employeeName", p.employeeName(), "date", p.permission().date(),
+            "from", p.permission().from(), "to", p.permission().to(), "minutes", p.permission().minutes(), "reason", p.permission().reason()))
+        .toList()));
+  }
+
+  private void getLeavePolicy(ServerRequest req, ServerResponse res, SessionUser user) {
+    var employees = store.getEmployees();
+    json(res, 200, Map.of("categories", leave.getLeaveCategories().stream()
+        .map(c -> map("category", c.category(), "daysPerYear", c.daysPerYear(), "employees", employees.stream().filter(e -> e.category().equals(c.category())).count()))
+        .toList()));
+  }
+
+  /** Admin only. Sets how many leave days a year each category gets; it takes effect for everyone in it at once. */
+  private void saveLeavePolicy(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    Map<String, String> values = new LinkedHashMap<>();
+    Map<String, String> errors = new LinkedHashMap<>();
+    Map<String, Integer> days = new LinkedHashMap<>();
+    for (String c : Types.CATEGORIES) {
+      String raw = (body.get(c) == null ? "" : String.valueOf(body.get(c))).strip();
+      values.put(c, raw);
+      try {
+        double n = raw.isEmpty() ? Double.NaN : Double.parseDouble(raw);
+        if (Double.isNaN(n) || Double.isInfinite(n) || n != Math.rint(n)) errors.put(c, "Enter a whole number of days.");
+        else if (n < 0 || n > 366) errors.put(c, "Use a number between 0 and 366.");
+        else days.put(c, (int) n);
+      } catch (NumberFormatException e) {
+        errors.put(c, "Enter a whole number of days.");
+      }
+    }
+    if (!errors.isEmpty()) {
+      json(res, 422, Map.of("errors", errors, "values", values));
+      return;
+    }
+    days.forEach(leave::setLeaveCategoryDays);
+    json(res, 200, Map.of("saved", true));
   }
 }
