@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Salary Slip {{period}} {{employeeCode}}</title>
+<style>
+  @page { size: A4; margin: 14mm 16mm 22mm 16mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Inter", "DejaVu Sans", sans-serif; font-size: 9.5pt; color: #18181b; line-height: 1.4; }
+  .letterhead { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 8px; border-bottom: 1.5px solid #dc2626; }
+  .letterhead img { height: 17mm; }
+  .company { text-align: right; font-size: 8pt; color: #71717a; line-height: 1.5; }
+  .company strong { display: block; font-size: 9pt; color: #18181b; }
+  h1 { margin: 22px 0 2px; text-align: center; font-size: 15pt; font-weight: 600; color: #2563eb; }
+  .period { text-align: center; font-size: 9pt; color: #52525b; padding-bottom: 14px; border-bottom: 1px solid #d4d4d8; }
+  .employee { display: flex; margin: 20px 0; padding: 10px 14px; background: #f8fafc; border: 1px solid #e4e4e7; border-radius: 6px; }
+  .employee div { flex: 1; }
+  .label { display: block; font-size: 7pt; letter-spacing: .08em; text-transform: uppercase; color: #71717a; margin-bottom: 3px; }
+  .value { font-weight: 600; }
+  .tables { display: flex; gap: 16px; margin-bottom: 20px; }
+  .tables > div { flex: 1; }
+  table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+  th.head { padding: 6px 10px; text-align: left; font-size: 7.5pt; letter-spacing: .08em; text-transform: uppercase; color: #fff; }
+  .earnings th.head { background: #2563eb; }
+  .deductions th.head { background: #dc2626; }
+  td, th.sub { padding: 7px 10px; border: 1px solid #e4e4e7; border-top: 0; }
+  th.sub { font-weight: 400; font-size: 8pt; color: #71717a; background: #f4f4f5; text-align: left; }
+  .amount { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.total td { font-weight: 600; background: #f4f4f5; }
+  .summary { display: flex; border: 1px solid #e4e4e7; border-radius: 6px; margin-bottom: 14px; }
+  .summary div { flex: 1; padding: 12px; text-align: center; border-left: 1px solid #e4e4e7; }
+  .summary div:first-child { border-left: 0; }
+  .summary .big { display: block; margin-top: 4px; font-size: 12pt; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .summary .net { background: #eff6ff; }
+  .summary .net .big { color: #2563eb; }
+  .words { padding: 10px 14px; border: 1px solid #e4e4e7; border-radius: 6px; }
+  footer { position: fixed; bottom: -16mm; left: 0; right: 0; font-size: 7.5pt; color: #71717a; }
+  footer .note { text-align: center; padding-bottom: 8px; }
+  footer .web { border-top: 1px solid #dc2626; padding-top: 5px; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+  <div class="letterhead">
+    <img src="{{logo}}" alt="LumiEther Research">
+    <div class="company">
+      <strong>{{companyName}}</strong>
+      {{companyAddress}}<br>
+      CIN: {{companyCin}}
+    </div>
+  </div>
+
+  <h1>Salary Slip</h1>
+  <div class="period">Pay Period: {{periodStart}} – {{periodEnd}}</div>
+
+  <div class="employee">
+    <div><span class="label">Employee name</span><span class="value">{{employeeName}}</span></div>
+    <div><span class="label">Employee ID</span><span class="value">{{employeeCode}}</span></div>
+    <div><span class="label">Designation</span><span class="value">{{designation}}</span></div>
+  </div>
+
+  <div class="tables">
+    <div>
+      <table class="earnings">
+        <tr><th class="head" colspan="2">Earnings</th></tr>
+        <tr><th class="sub">Component</th><th class="sub amount">Amount (₹)</th></tr>
+        <tr><td>Basic</td><td class="amount">{{basic}}</td></tr>
+        <tr class="total"><td>Gross Earnings</td><td class="amount">{{gross}}</td></tr>
+      </table>
+    </div>
+    <div>
+      <table class="deductions">
+        <tr><th class="head" colspan="2">Deductions</th></tr>
+        <tr><th class="sub">Component</th><th class="sub amount">Amount (₹)</th></tr>
+        {{#if hasDeduction}}<tr><td>Loss of Pay (LOP)</td><td class="amount">{{deduction}}</td></tr>{{/if}}
+        <tr class="total"><td>Total Deductions</td><td class="amount">{{deduction}}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="summary">
+    <div><span class="label">Gross earnings</span><span class="big">{{grossInr}}</span></div>
+    <div><span class="label">Total deductions</span><span class="big">{{deductionInr}}</span></div>
+    <div class="net"><span class="label">Net pay</span><span class="big">{{netInr}}</span></div>
+  </div>
+
+  <div class="words"><strong>Amount in Words:</strong> {{amountInWords}}</div>
+
+  <footer>
+    <div class="note">This is a computer-generated document and does not require a physical signature. | Confidential</div>
+    <div class="web"><strong>web:</strong> <a href="https://www.lumiether.com">https://www.lumiether.com</a></div>
+  </footer>
+</body>
+</html>

@@ -11,6 +11,10 @@ import app.lumiether.db.Store;
 import app.lumiether.domain.Dates;
 import app.lumiether.domain.Leave;
 import app.lumiether.domain.Requests;
+import app.lumiether.payslip.PayslipRenderer;
+import app.lumiether.payslip.PayslipService;
+import app.lumiether.payslip.PayslipStore;
+import app.lumiether.payslip.PdfClient;
 import app.lumiether.domain.Employees;
 import app.lumiether.domain.Types;
 import app.lumiether.domain.Types.Admin;
@@ -47,6 +51,9 @@ public final class Api {
   private final ChangePassword changePassword;
   private final LeaveStore leave;
   private final Supplier<LocalDate> today;
+  private final PayslipStore payslips;
+  private final PayslipService payslipService;
+  private final String cronSecret;
 
   private final Settings settings;
 
@@ -63,6 +70,14 @@ public final class Api {
 
   /** {@code today} is the team's calendar day (IST); tests pass a fixed one. */
   public Api(Store store, Auth auth, Sessions sessions, Settings settings, Supplier<LocalDate> today) {
+    this(store, auth, sessions, settings, today, new PdfClient(null), null);
+  }
+
+  /** {@code renderer}: HTML to PDF (the WeasyPrint service). {@code cronSecret}: what the monthly job must send as a Bearer token. */
+  public Api(Store store, Auth auth, Sessions sessions, Settings settings, Supplier<LocalDate> today, PayslipRenderer renderer, String cronSecret) {
+    this.payslips = new PayslipStore(store.db());
+    this.payslipService = new PayslipService(payslips, renderer);
+    this.cronSecret = cronSecret;
     this.leave = new LeaveStore(store);
     this.today = today;
     this.settings = settings;
@@ -134,6 +149,13 @@ public final class Api {
     routing.get("/api/admin/permissions", authed(Role.admin, this::allPermissions));
     routing.get("/api/admin/leave-policy", authed(Role.admin, this::getLeavePolicy));
     routing.put("/api/admin/leave-policy", authed(Role.admin, this::saveLeavePolicy));
+
+    routing.get("/api/admin/payslips", authed(Role.admin, this::adminPayslips));
+    routing.post("/api/admin/payslips", authed(Role.admin, this::generatePayslip));
+    routing.post("/api/admin/payslips/{id}/publish", authed(Role.admin, this::publishPayslip));
+    routing.get("/api/employee/payslips", authed(Role.employee, this::myPayslips));
+    routing.get("/api/payslips/{id}/pdf", plain(this::downloadPayslip));
+    routing.get("/api/cron/payslips", plain(this::cronPayslips));
   }
 
   // ---------------------------------------------------------------- plumbing
@@ -581,5 +603,70 @@ public final class Api {
     }
     days.forEach(leave::setLeaveCategoryDays);
     json(res, 200, Map.of("saved", true));
+  }
+
+  // ----------------------------------------------------------------- payslips
+
+  /** The chosen month's payslips, and who they can be generated for. Defaults to the current month. */
+  private void adminPayslips(ServerRequest req, ServerResponse res, SessionUser user) {
+    String requested = req.query().first("month").orElse("");
+    String month = PayslipService.isMonth(requested) ? requested : today.get().toString().substring(0, 7);
+    var employees = payslips.getPayslipEmployees().stream()
+        .map(e -> map("id", e.id(), "name", e.name(), "employeeCode", e.employeeCode(), "designation", e.designation(),
+            "monthlySalary", e.monthlySalary() == null ? null : app.lumiether.domain.Money.toPlain(e.monthlySalary())))
+        .toList();
+    json(res, 200, map("month", month, "employees", employees, "payslips", payslips.listPayslipsForMonth(month + "-01")));
+  }
+
+  /** Admin only. Without {@code replace} an existing published payslip for that month is never touched. */
+  private void generatePayslip(ServerRequest req, ServerResponse res, SessionUser user) {
+    Map<String, Object> body = body(req, res);
+    if (body == null) return;
+    var result = payslipService.generate(new PayslipService.GenerateInput(Json.text(body, "employeeId"), Json.text(body, "month"),
+        Json.text(body, "basic"), Json.text(body, "deduction"), Boolean.TRUE.equals(body.get("replace"))));
+    switch (result.kind()) {
+      case "saved", "replaced" -> {
+        String verb = result.kind().equals("replaced") ? "replaced" : "generated";
+        json(res, 201, map("done", map("outcome", result.kind(),
+            "message", "Payslip " + verb + " for " + result.employeeName() + ", " + PayslipService.monthLabel(result.month()))));
+      }
+      case "invalid" -> json(res, 422, Map.of("errors", result.errors()));
+      case "confirm" -> json(res, 409, Map.of("confirm", map("employeeName", result.employeeName(), "month", result.month())));
+      default -> json(res, 503, Map.of("pdfError", result.message()));
+    }
+  }
+
+  /** Admin only. Publishes a draft as it is (no LOP), so the employee can see and download it. */
+  private void publishPayslip(ServerRequest req, ServerResponse res, SessionUser user) {
+    if (payslips.publishPayslip(req.path().pathParameters().get("id"))) json(res, 200, Map.of("ok", true));
+    else error(res, 409, "That payslip is already published or no longer exists.");
+  }
+
+  private void myPayslips(ServerRequest req, ServerResponse res, SessionUser user) {
+    json(res, 200, Map.of("payslips", payslips.listPayslipsForEmployee(user.id())));
+  }
+
+  /** An employee can download only their own published payslip, an admin any. Everyone else, signed in or not, gets a 404. */
+  private void downloadPayslip(ServerRequest req, ServerResponse res) {
+    var user = sessions.userForCookie(req.headers().first(HeaderNames.COOKIE).orElse(null));
+    var file = user.isEmpty() ? null : payslips.getPayslipFileFor(user.get().id(), user.get().role() == Role.admin, req.path().pathParameters().get("id"));
+    if (file == null) {
+      error(res, 404, "Not found");
+      return;
+    }
+    res.status(Status.OK_200).header(HeaderNames.CONTENT_TYPE, "application/pdf")
+        .header(HeaderNames.CONTENT_DISPOSITION, "attachment; filename=\"" + file.filename() + "\"")
+        .header(HeaderNames.CACHE_CONTROL, "private, no-store").send(file.pdf());
+  }
+
+  /** Called by the host's cron on the 1st with {@code Authorization: Bearer $CRON_SECRET}. Anyone else gets a 404, so the route doesn't advertise itself. */
+  private void cronPayslips(ServerRequest req, ServerResponse res) {
+    if (!PayslipService.isCronAuthorized(req.headers().first(HeaderNames.AUTHORIZATION).orElse(null), cronSecret)) {
+      res.status(Status.NOT_FOUND_404).header(HeaderNames.CONTENT_TYPE, "text/plain").send("Not found");
+      return;
+    }
+    String month = PayslipService.previousMonthOf(today.get().toString());
+    var result = payslipService.createDrafts(month);
+    json(res, result.failed() != null ? 503 : 200, map("month", month, "created", result.created(), "skipped", result.skipped(), "failed", result.failed()));
   }
 }

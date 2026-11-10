@@ -30,7 +30,8 @@ public final class Main {
     // Read at each sign-in, as the Node app read process.env, so the bootstrap closes the moment an admin exists.
     Auth auth = new Auth(store, () -> new Auth.Bootstrap(config.adminEmail(), config.adminPasswordHash()));
     Sessions sessions = new Sessions(store, auth, config.cookieSecret());
-    Api api = new Api(store, auth, sessions, new Api.Settings(config.cookieSecure(), config.allowedOrigins()));
+    Api api = new Api(store, auth, sessions, new Api.Settings(config.cookieSecure(), config.allowedOrigins()), app.lumiether.domain.Dates::today,
+        new app.lumiether.payslip.PdfClient(config.pdfServiceUrl()), config.cronSecret());
 
     WebServer server = WebServer.builder().port(config.port()).routing(api::register).build().start();
     if (!server.isRunning()) {

@@ -29,6 +29,9 @@ class ApiTest {
   static final String COOKIE_SECRET = "an-api-test-cookie-secret-that-is-long-enough-1234";
   static final String ORIGIN = "http://app.test";
   static final String EVIL = "https://evil.example";
+  static final String CRON_SECRET = "an-api-test-cron-secret-1234";
+  /** The PDF service is always a fake here; a test swaps it to simulate the service being down. */
+  final AtomicReference<app.lumiether.payslip.PayslipRenderer> renderer = new AtomicReference<>(html -> "%PDF-1.4 fake".getBytes());
   /** The team's "today" for every leave rule: a Wednesday. */
   static final java.time.LocalDate TODAY = java.time.LocalDate.parse("2026-11-04");
 
@@ -43,7 +46,8 @@ class ApiTest {
     var db = TestDb.reset();
     store = new Store(db);
     auth = new Auth(store, bootstrap::get);
-    var api = new Api(store, auth, new Sessions(store, auth, secret), new Api.Settings(secure, List.of(ORIGIN)), () -> TODAY);
+    var api = new Api(store, auth, new Sessions(store, auth, secret), new Api.Settings(secure, List.of(ORIGIN)), () -> TODAY,
+        html -> renderer.get().render(html), CRON_SECRET);
     server = WebServer.builder().port(0).routing(api::register).build().start();
     base = "http://localhost:" + server.port();
   }
@@ -706,6 +710,181 @@ class ApiTest {
     var p = adminAndEmployee();
     call("PUT", "/api/admin/leave-policy", p.admin(), Map.of("contractor", "24", "employee", "10", "intern", "24", "student", "24"));
     assertEquals(10.0, call("GET", "/api/admin/dashboard", p.admin(), null).body().at("/balances/0/total").asDouble());
+  }
+
+  // ----------------------------------------------------------------- payslips
+
+  void giveSalary(String email, String salary, String designation) {
+    store.db().query("update employees set monthly_salary = $2, designation = $3 where lower(email) = $1", email, salary, designation);
+  }
+
+  Map<String, Object> payslipBody(String employeeId, String month, String basic, String deduction) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("employeeId", employeeId);
+    m.put("month", month);
+    m.put("basic", basic);
+    m.put("deduction", deduction);
+    return m;
+  }
+
+  String employeeId(String email) {
+    return store.findEmployeeByEmail(email).orElseThrow().employee().id();
+  }
+
+  @Test
+  void thePayslipRoutesKeepEachRoleToItsOwnSide() throws Exception {
+    var p = adminAndEmployee();
+    for (String[] route : new String[][] {{"GET", "/api/admin/payslips"}, {"POST", "/api/admin/payslips"}, {"POST", "/api/admin/payslips/00000000-0000-4000-8000-000000000001/publish"}}) {
+      assertEquals(401, call(route[0], route[1], null, Map.of()).status(), "signed out " + route[1]);
+      assertEquals(403, call(route[0], route[1], p.employee(), Map.of()).status(), "employee on " + route[1]);
+    }
+    assertEquals(401, call("GET", "/api/employee/payslips", null, null).status());
+    assertEquals(403, call("GET", "/api/employee/payslips", p.admin(), null).status());
+  }
+
+  @Test
+  void anAdminGeneratesAPayslipAndTheEmployeeSeesAndDownloadsIt() throws Exception {
+    var p = adminAndEmployee();
+    giveSalary("priya@gmail.com", "16500", "Software Engineer");
+    Res made = call("POST", "/api/admin/payslips", p.admin(), payslipBody(employeeId("priya@gmail.com"), "2026-10", "16500", "1500.5"));
+    assertEquals(201, made.status(), made.raw());
+    assertEquals("Payslip generated for Priya, October 2026", made.body().at("/done/message").asText());
+
+    JsonNode list = call("GET", "/api/admin/payslips?month=2026-10", p.admin(), null).body();
+    assertEquals("2026-10", list.get("month").asText());
+    assertEquals(List.of("Priya", 1_650_000, 150_050, 1_499_950, true, "2026-10-01"),
+        List.of(list.at("/payslips/0/employeeName").asText(), list.at("/payslips/0/basic").asInt(), list.at("/payslips/0/deduction").asInt(),
+            list.at("/payslips/0/net").asInt(), list.at("/payslips/0/published").asBoolean(), list.at("/payslips/0/periodMonth").asText()));
+    assertEquals("16500.00", list.at("/employees/0/monthlySalary").asText());
+    assertEquals("Software Engineer", list.at("/employees/0/designation").asText());
+    assertFalse(list.toString().contains("pdf"));
+
+    JsonNode mine = call("GET", "/api/employee/payslips", p.employee(), null).body().get("payslips");
+    assertEquals(1, mine.size());
+    String id = mine.get(0).get("id").asText();
+    Res pdf = call("GET", "/api/payslips/" + id + "/pdf", p.employee(), null);
+    assertEquals(200, pdf.status());
+    assertEquals("%PDF-1.4 fake", pdf.raw());
+    assertEquals("application/pdf", pdf.headers().firstValue("content-type").orElse(""));
+    assertTrue(pdf.headers().firstValue("content-disposition").orElse("").matches("attachment; filename=\"Payslip_HR-EMP-\\d{5}_2026-10\\.pdf\""));
+    assertEquals("private, no-store", pdf.headers().firstValue("cache-control").orElse(""));
+  }
+
+  @Test
+  void onlyTheOwnerAndAnAdminCanDownloadAndEveryoneElseGetsA404() throws Exception {
+    var p = adminAndEmployee();
+    makeEmployee("Other");
+    String other = signIn("other@gmail.com", "temp-pass-1");
+    call("POST", "/api/admin/payslips", p.admin(), payslipBody(employeeId("priya@gmail.com"), "2026-10", "16500", ""));
+    String id = call("GET", "/api/employee/payslips", p.employee(), null).body().at("/payslips/0/id").asText();
+    assertEquals(200, call("GET", "/api/payslips/" + id + "/pdf", p.admin(), null).status());
+    assertEquals(404, call("GET", "/api/payslips/" + id + "/pdf", other, null).status());
+    assertEquals(404, call("GET", "/api/payslips/" + id + "/pdf", null, null).status()); // signed out
+    assertEquals(404, call("GET", "/api/payslips/not-a-uuid/pdf", p.admin(), null).status());
+    assertEquals(404, call("GET", "/api/payslips/00000000-0000-4000-8000-000000000000/pdf", p.admin(), null).status());
+  }
+
+  @Test
+  void badPayslipNumbersAre422WithTheCurrentAppsMessagesAndSaveNothing() throws Exception {
+    var p = adminAndEmployee();
+    Res r = call("POST", "/api/admin/payslips", p.admin(), payslipBody("not-a-uuid", "1999-12", "abc", "-1"));
+    assertEquals(422, r.status());
+    assertEquals("Choose an employee.", r.body().at("/errors/employee").asText());
+    assertEquals("Choose a month.", r.body().at("/errors/month").asText());
+    assertEquals("Enter the basic as an amount, like 16500 or 16500.50.", r.body().at("/errors/basic").asText());
+    assertEquals("Deduction can't be negative.", r.body().at("/errors/deduction").asText());
+    Res tooMuch = call("POST", "/api/admin/payslips", p.admin(), payslipBody(employeeId("priya@gmail.com"), "2026-10", "16500", "16500.01"));
+    assertEquals("Deduction can't be more than the basic of ₹16,500.00.", tooMuch.body().at("/errors/deduction").asText());
+    assertEquals(0, call("GET", "/api/admin/payslips?month=2026-10", p.admin(), null).body().get("payslips").size());
+  }
+
+  @Test
+  void regeneratingAPublishedPayslipAsksFirstAndReplacesOnlyWithTheGoAhead() throws Exception {
+    var p = adminAndEmployee();
+    String id = employeeId("priya@gmail.com");
+    call("POST", "/api/admin/payslips", p.admin(), payslipBody(id, "2026-10", "16500", "0"));
+    Res ask = call("POST", "/api/admin/payslips", p.admin(), payslipBody(id, "2026-10", "16500", "500"));
+    assertEquals(409, ask.status());
+    assertEquals(List.of("Priya", "2026-10"), List.of(ask.body().at("/confirm/employeeName").asText(), ask.body().at("/confirm/month").asText()));
+    assertEquals(0, call("GET", "/api/admin/payslips?month=2026-10", p.admin(), null).body().at("/payslips/0/deduction").asInt()); // untouched
+    Map<String, Object> go = payslipBody(id, "2026-10", "16500", "500");
+    go.put("replace", true);
+    Res done = call("POST", "/api/admin/payslips", p.admin(), go);
+    assertEquals(201, done.status());
+    assertEquals("Payslip replaced for Priya, October 2026", done.body().at("/done/message").asText());
+    JsonNode rows = call("GET", "/api/admin/payslips?month=2026-10", p.admin(), null).body().get("payslips");
+    assertEquals(List.of(1, 50_000), List.of(rows.size(), rows.get(0).get("deduction").asInt()));
+  }
+
+  @Test
+  void whenThePdfServiceIsDownTheAdminIsToldAndNothingIsSaved() throws Exception {
+    var p = adminAndEmployee();
+    renderer.set(html -> {
+      throw new app.lumiether.payslip.PdfClient.PdfServiceException();
+    });
+    Res r = call("POST", "/api/admin/payslips", p.admin(), payslipBody(employeeId("priya@gmail.com"), "2026-10", "16500", ""));
+    assertEquals(503, r.status());
+    assertEquals("PDF service is not running", r.body().get("pdfError").asText());
+    assertEquals(0, call("GET", "/api/admin/payslips?month=2026-10", p.admin(), null).body().get("payslips").size());
+  }
+
+  @Test
+  void theMonthDefaultsToTheCurrentOneAndAnUnreadableMonthFallsBackToIt() throws Exception {
+    var p = adminAndEmployee();
+    assertEquals("2026-11", call("GET", "/api/admin/payslips", p.admin(), null).body().get("month").asText());
+    assertEquals("2026-11", call("GET", "/api/admin/payslips?month=nonsense", p.admin(), null).body().get("month").asText());
+    assertEquals("2026-03", call("GET", "/api/admin/payslips?month=2026-03", p.admin(), null).body().get("month").asText());
+  }
+
+  @Test
+  void theMonthlyJobMakesDraftsOnlyForTheRightCallerAndEmployeesCantSeeThem() throws Exception {
+    var p = adminAndEmployee();
+    giveSalary("priya@gmail.com", "16500", "Engineer");
+    Map<String, String> good = Map.of("Authorization", "Bearer " + CRON_SECRET);
+    assertEquals(404, send("GET", "/api/cron/payslips", Map.of(), null).status());
+    assertEquals(404, send("GET", "/api/cron/payslips", Map.of("Authorization", "Bearer nope"), null).status());
+    assertEquals(404, send("GET", "/api/cron/payslips", Map.of("Authorization", "Bearer " + CRON_SECRET + "x"), null).status());
+    assertEquals(404, call("GET", "/api/cron/payslips", p.admin(), null).status()); // a signed-in admin is not the job
+
+    Res run = send("GET", "/api/cron/payslips", good, null);
+    assertEquals(200, run.status(), run.raw());
+    assertEquals(List.of("2026-10", 1, 0), List.of(run.body().get("month").asText(), run.body().get("created").asInt(), run.body().get("skipped").asInt())); // TODAY is 4 Nov: last month is Oct
+    assertTrue(run.body().get("failed").isNull());
+    assertEquals(0, call("GET", "/api/employee/payslips", p.employee(), null).body().get("payslips").size());
+    JsonNode draft = call("GET", "/api/admin/payslips?month=2026-10", p.admin(), null).body().at("/payslips/0");
+    assertFalse(draft.get("published").asBoolean());
+    assertEquals(200, send("GET", "/api/cron/payslips", good, null).status()); // again: creates nothing
+    assertEquals(0, send("GET", "/api/cron/payslips", good, null).body().get("created").asInt());
+
+    String id = draft.get("id").asText();
+    assertEquals(404, call("GET", "/api/payslips/" + id + "/pdf", p.employee(), null).status()); // a draft is the admin's alone
+    assertEquals(200, call("GET", "/api/payslips/" + id + "/pdf", p.admin(), null).status());
+    assertEquals(200, call("POST", "/api/admin/payslips/" + id + "/publish", p.admin(), null).status());
+    assertEquals(409, call("POST", "/api/admin/payslips/" + id + "/publish", p.admin(), null).status());
+    assertEquals(200, call("GET", "/api/payslips/" + id + "/pdf", p.employee(), null).status());
+    assertEquals(1, call("GET", "/api/employee/payslips", p.employee(), null).body().get("payslips").size());
+  }
+
+  @Test
+  void theMonthlyJobReportsA503WhenThePdfServiceIsDown() throws Exception {
+    adminAndEmployee();
+    giveSalary("priya@gmail.com", "16500", "Engineer");
+    renderer.set(html -> {
+      throw new app.lumiether.payslip.PdfClient.PdfServiceException();
+    });
+    Res r = send("GET", "/api/cron/payslips", Map.of("Authorization", "Bearer " + CRON_SECRET), null);
+    assertEquals(503, r.status());
+    assertEquals("PDF service is not running", r.body().get("failed").asText());
+  }
+
+  @Test
+  void withNoCronSecretConfiguredTheJobAnswers404ToEveryone() throws Exception {
+    server.stop();
+    var api = new Api(store, auth, new Sessions(store, auth, COOKIE_SECRET), new Api.Settings(false, List.of(ORIGIN)), () -> TODAY, html -> new byte[0], null);
+    server = WebServer.builder().port(0).routing(api::register).build().start();
+    base = "http://localhost:" + server.port();
+    assertEquals(404, send("GET", "/api/cron/payslips", Map.of("Authorization", "Bearer "), null).status());
+    assertEquals(404, send("GET", "/api/cron/payslips", Map.of("Authorization", "Bearer null"), null).status());
   }
 
   // ---------------------------------------------------------- password change
